@@ -10,7 +10,7 @@ require 'torch'
 require 'image'
 require 'nn'
 require 'optim'
-memory = require 'memory_sqlite'
+memory = require 'memory_lsqlite3'
 network = require 'network'
 actions = require 'actions'
 Action = require 'action'
@@ -129,7 +129,7 @@ function on_paint()
         gui.text(1+175, 1, string.format("LLBAV: %.2f", STATS.LAST_BEST_ACTION_VALUE or 0))
     end
     --]]
-    gui.text(1+350-15, 1, string.format("Memory: %d/%d", memory.getCountEntries(false), memory.getCountEntries(true)))
+    gui.text(1+350-15, 1, string.format("Memory: %d/%d", memory.getCountEntriesCached(false), memory.getCountEntriesCached(true)))
 
     --[[
     local observedGammaRewards = "oGR: "
@@ -202,7 +202,7 @@ function on_frame_emulated()
     -- show state chain
     -- must happen before training as it might depend on network's current output
     --print("Before display")
-    display.image(states.stateChainToImage(states.getLastEntries(STATES_PER_EXAMPLE), Q), {win=17, title="Last states"})
+    display.image(states.stateChainsToImage({states.getLastEntries(STATES_PER_EXAMPLE)}, Q), {win=17, title="Last states"})
 
     --print("Before plot")
     -- plot average rewards
@@ -255,16 +255,24 @@ function on_frame_emulated()
     --print("Before train")
     if (STATS.ACTION_COUNTER == 250 and memory.isTrainDataFull())
         or STATS.ACTION_COUNTER % 5000 == 0 then
+        --or STATS.ACTION_COUNTER % 250 == 0 then
         --print("Training AE...")
         --for i=1,25 do
         --    trainAE()
         --end
 
+        print("Preparing state ids cache...")
+        memory.prepareStateIdsCache()
+
         print("Training...")
-        local nTrainingBatches = 3500 --math.max(math.floor(#memory.trainData / BATCH_SIZE), 51)
+        local nTrainingBatches = 2500 --math.max(math.floor(#memory.trainData / BATCH_SIZE), 51)
+        --local nTrainingBatches = 50
         local nTrainingGroups = 50 -- number of plot points per training epoch
+        --local nTrainingGroups = 1
         local nTrainBatchesPerGroup = math.floor(nTrainingBatches / nTrainingGroups)
         local nValBatchesPerGroup = math.floor(nTrainBatchesPerGroup * 0.10)
+        assert(nTrainBatchesPerGroup >= 1)
+        assert(nValBatchesPerGroup >= 1)
         for i=1,nTrainingGroups do
             local sumLossTrain = 0
             local sumLossVal = 0
@@ -310,7 +318,8 @@ function on_frame_emulated()
 
     --print("Before level ended")
     local levelEnded = state.levelBeatenStatus == 128 or state.marioGameStatus == 2
-    if levelEnded or (STATS.ACTION_COUNTER - LAST_SAVE_STATE_LOAD) > 1000 then
+    if levelEnded or (STATS.ACTION_COUNTER - LAST_SAVE_STATE_LOAD) > 750 then
+    --if levelEnded or (STATS.ACTION_COUNTER - LAST_SAVE_STATE_LOAD) > 100 then
         print("Reloading saved gamestate and saving states...")
         states.addToMemory()
         states.clear()
@@ -414,12 +423,25 @@ end
 
 function trainOneBatch()
     -- Train
-    --FRAME_COUNTER % BATCH_SIZE == 0
-    if memory.getCountEntries(false) >= memory.MEMORY_TRAINING_MIN_SIZE then
+    if memory.getCountEntriesCached(false) >= memory.MEMORY_TRAINING_MIN_SIZE then
+        -- takes ~40% of the time
+        --    <1% load random state ids
+        --    10% load states by id
+        --    30% reevaluate rewards
+        --local timeStart = os.clock()
         local batchInput, batchTarget, stateChains = memory.getBatch(BATCH_SIZE, false, true)
-        --print("Training with a batch of size " .. batchInput:size(1))
+        --print(string.format("getBatch: %.8f", os.clock()-timeStart))
+
+        -- takes ~52% of the time
+        --local timeStart = os.clock()
         local loss = network.forwardBackwardBatch(batchInput, batchTarget)
-        display.image(states.stateChainToImage(stateChains[1], Q), {win=18, title="Last training batch 1st example"})
+        --print(string.format("fwbw: %.8f", os.clock()-timeStart))
+
+        -- takes ~7% of the time
+        --local timeStart = os.clock()
+        display.image(states.stateChainsToImage(stateChains, Q, 1, 1), {win=18, title="Last training batch, 1st example"})
+        --print(string.format("plot: %.8f", os.clock()-timeStart))
+
         return loss
     else
         return 0
@@ -428,7 +450,7 @@ end
 
 function valOneBatch()
     if memory.getCountEntries(true) >= BATCH_SIZE then
-        local batchInput, batchTarget = memory.getValidationBatch(BATCH_SIZE)
+        local batchInput, batchTarget = memory.getBatch(BATCH_SIZE, true, true)
         return network.batchToLoss(batchInput, batchTarget)
     else
         return 0

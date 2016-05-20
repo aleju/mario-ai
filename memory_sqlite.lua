@@ -123,6 +123,8 @@ function memory.insertState(state, validation, updateIfExists)
     local ifExistsCommand = "IGNORE"
     if updateIfExists == true then ifExistsCommand = "UPDATE" end
     local screen_jpg_serialized = torch.serialize(state.screen, "ascii")
+    print("screen length serialized:", #screen_jpg_serialized)
+    print("screen length serialized escaped:", #con:escape(screen_jpg_serialized))
     local isLevelEnding_int = 0
     if state.isLevelEnding then isLevelEnding_int = 1 end
     local dummy_int = 0
@@ -401,12 +403,16 @@ function memory.getBatch(batchSize, validation, reevaluate)
 end
 
 function memory.rowToState(row)
+    print("Deserializing screen...")
     local screen_jpg = torch.deserialize(row.screen_jpg, "ascii")
+    print("Deserialized")
+    print(screen_jpg:size(1), screen_jpg:size(2), screen_jpg:size(3))
+
     local isDummy = false
     if row.is_dummy == 1 then isDummy = true end
     local action = Action.new(row.action_arrow, row.action_button)
     local reward = Reward.new(row.reward_score_diff, row.reward_x_diff, row.reward_level_beaten, row.reward_expected_gamma, row.reward_expected_gamma_raw, row.reward_observed_gamma)
-    local state = State.new(row.id, row.score, row.count_lifes, row.level_beaten_status, row.mario_game_status, row.player_x, row.mario_image, row.is_level_ending, action, reward)
+    local state = State.new(row.id, screen_jpg, row.score, row.count_lifes, row.level_beaten_status, row.mario_game_status, row.player_x, row.mario_image, row.is_level_ending, action, reward)
     state.isDummy = isDummy
     return state
 end

@@ -152,16 +152,23 @@ end
 function states.addToMemory()
     print("start addToMemory")
     -- -1 because the last state doesnt have a reward and action yet
+    local statesTrain = {}
+    local statesVal = {}
     for i=1,#states.data-1 do
         local state = states.data[i]
         local id = state.id
         local id1000 = id % 1000
         local val = false
         if (id1000 >= 750 and id1000 < 800) or (id1000 >= 950 and id1000 < 1000) then
-            val = true
+            --val = true
+            table.insert(statesVal, state)
+        else
+            table.insert(statesTrain, state)
         end
-        memory.addState(state, val)
+        --memory.addState(state, val)
     end
+    memory.addStates(statesTrain, false)
+    memory.addStates(statesVal, true)
     print("end addToMemory")
 end
 
@@ -291,6 +298,7 @@ function states.stateChainToImage(stateChain, net)
 
         if transfo ~= nil then
             transfo = transfo.output:float()
+            --print(transfo:size(1), transfo:size(2), transfo:size(3))
 
             --[[
             print("transfo size", transfo:size(1), transfo:size(2), transfo:size(3))
@@ -356,6 +364,135 @@ function states.stateChainToImage(stateChain, net)
     table.insert(previousScreens, lastScreen)
 
     local result = image.toDisplayTensor{input=previousScreens, nrow=#previousScreens, padding=1}
+    --local result = image.toDisplayTensor{input={lastScreen}, nrow=1, padding=1}
+    --[[
+    local c = math.max(IMG_DIMENSIONS_Q_LAST[1], IMG_DIMENSIONS_Q_HISTORY[1])
+    local h = math.max(prev:size(3)+16, IMG_DIMENSIONS_Q_LAST[2])
+    local w = prev:size(2)+IMG_DIMENSIONS_Q_LAST[3]
+    local result = torch.zeros(c, h, w)
+    result[{{1,c}, {1,prev:size(2)}, {1,prev:size(3)}}] = prev
+    for i=1,#previousStates do
+        image.draw()
+    end
+    --]]
+
+    return result
+end
+
+function states.stateChainsToImage(stateChains, net, startAt, endAt)
+    startAt = startAt or 1
+    endAt = endAt or #stateChains
+    local batchSize = endAt - startAt + 1
+    local allScreens = {}
+
+    for sc=startAt,endAt do
+        local stateChain = stateChains[sc]
+        local lastState = stateChain[#stateChain]
+        local previousStates = {}
+        local previousScreens = {}
+        for i=1,#stateChain-1 do
+            table.insert(previousStates, stateChain[i])
+            local screen = states.decompressScreen(stateChain[i].screen)
+            local screenWithAction = torch.zeros(screen:size(1), screen:size(2)+16, screen:size(3))
+            screenWithAction[{{1,screen:size(1)}, {1,screen:size(2)}, {1, screen:size(3)}}] = screen
+            if screen:size(1) == 1 then
+                screenWithAction = torch.repeatTensor(screenWithAction, 3, 1, 1)
+            end
+            local actionStr = actions.actionToString(stateChain[i].action)
+            local x = 2
+            local y = screen:size(2) + 2
+            screenWithAction = image.drawText(screenWithAction, actionStr, x, y, {color={255,255,255}})
+            screenWithAction = image.scale(screenWithAction, IMG_DIMENSIONS_Q_LAST[2], IMG_DIMENSIONS_Q_LAST[3])
+            table.insert(previousScreens, screenWithAction)
+        end
+
+        local lastScreen = states.decompressScreen(lastState.screen)
+
+        if net ~= nil then
+            -- Get the transformation matrix from the AffineTransformMatrixGenerator
+            local transfo = nil
+            local function findTransformer(m)
+                local name = torch.type(m)
+
+                if name:find('AffineTransformMatrixGenerator') then
+                    transfo = m
+                end
+            end
+            net:apply(findTransformer)
+
+            if transfo ~= nil then
+                transfo = transfo.output:float()
+                transfo = transfo[{{sc}, {}, {}}] -- must have nDims=3, transfo[sc] reduces to nDims=2
+                --print(transfo:size(1), transfo:size(2))
+
+                --[[
+                print("transfo size", transfo:size(1), transfo:size(2), transfo:size(3))
+                print("Transformation matrix values:")
+                for a=1,transfo:size(1) do
+                    for b=1,transfo:size(2) do
+                        for c=1,transfo:size(3) do
+                            print(string.format("%d %d %d = %.4f", a, b, c, transfo[a][b][c]))
+                        end
+                    end
+                end
+                --]]
+
+                local corners = torch.Tensor{{-1,-1,1},{-1,1,1},{1,-1,1},{1,1,1}}
+                -- Compute the positions of the corners in the original image
+                local points = torch.bmm(corners:repeatTensor(1,1,1), transfo:transpose(2,3))
+                -- Ensure these points are still in the image
+                local imageSize = lastScreen:size(2)
+
+                --[[
+                print("Corner points before fix:")
+                for batch=1,batchSize do
+                    for pt=1,4 do
+                        local point = points[batch][pt]
+                        print(string.format("(%.4f, %.4f)", point[1], point[2]))
+                    end
+                end
+                --]]
+
+                points = torch.floor((points+1)*imageSize/2)
+                points:clamp(1,imageSize-1)
+
+                --[[
+                print("Corner points after fix:")
+                for batch=1,batchSize do
+                    for pt=1,4 do
+                        local point = points[batch][pt]
+                        print(string.format("(%.4f, %.4f)", point[1], point[2]))
+                    end
+                end
+                --]]
+
+                local batch = 1
+                for pt=1,4 do
+                    local point = points[batch][pt]
+                    --print(string.format("p2 %.4f %.4f", point[1], point[2]))
+                    for chan=1,IMG_DIMENSIONS_Q_LAST[1] do
+                        local max_value = lastScreen[chan]:max()*1.1
+                        -- We add 4 white pixels because one can disappear in image rescaling
+                        lastScreen[chan][point[1]][point[2]] = max_value
+                        lastScreen[chan][point[1]+1][point[2]] = max_value
+                        lastScreen[chan][point[1]][point[2]+1] = max_value
+                        lastScreen[chan][point[1]+1][point[2]+1] = max_value
+                    end
+                end
+            end
+        end
+
+        if lastScreen:size(1) == 1 then
+            lastScreen = torch.repeatTensor(lastScreen, 3, 1, 1)
+        end
+
+        for i=1,#previousScreens do
+            table.insert(allScreens, previousScreens[i])
+        end
+        table.insert(allScreens, lastScreen)
+    end
+
+    local result = image.toDisplayTensor{input=allScreens, nrow=#stateChains[1], padding=1}
     --local result = image.toDisplayTensor{input={lastScreen}, nrow=1, padding=1}
     --[[
     local c = math.max(IMG_DIMENSIONS_Q_LAST[1], IMG_DIMENSIONS_Q_HISTORY[1])
