@@ -55,6 +55,21 @@ actions.ACTION_TO_BUTTON_NAME[9] = "gamepad-1-X"
 actions.ACTION_TO_BUTTON_NAME[10] = "gamepad-1-L"
 actions.ACTION_TO_BUTTON_NAME[11] = "gamepad-1-R"
 
+actions.ACTION_TO_SHORT_NAME = {}
+actions.ACTION_TO_SHORT_NAME[0] = "B"
+actions.ACTION_TO_SHORT_NAME[1] = "Y"
+actions.ACTION_TO_SHORT_NAME[2] = "s"
+actions.ACTION_TO_SHORT_NAME[3] = "S"
+actions.ACTION_TO_SHORT_NAME[4] = "AU"
+actions.ACTION_TO_SHORT_NAME[5] = "AD"
+actions.ACTION_TO_SHORT_NAME[6] = "AL"
+actions.ACTION_TO_SHORT_NAME[7] = "AR"
+actions.ACTION_TO_SHORT_NAME[8] = "A"
+actions.ACTION_TO_SHORT_NAME[9] = "X"
+actions.ACTION_TO_SHORT_NAME[10] = "L"
+actions.ACTION_TO_SHORT_NAME[11] = "R"
+
+
 function actions.isArrowsActionIdx(actionIdx)
     for i=1,#actions.ACTIONS_ARROWS do
         if actionIdx == actions.ACTIONS_ARROWS[i] then
@@ -71,6 +86,14 @@ function actions.isButtonsActionIdx(actionIdx)
         end
     end
     return false
+end
+
+function actions.actionToString(action)
+    if action == nil then
+        return "nil"
+    else
+        return actions.ACTION_TO_SHORT_NAME[action.arrow] .. "+" .. actions.ACTION_TO_SHORT_NAME[action.button]
+    end
 end
 
 function actions.createRandomAction()

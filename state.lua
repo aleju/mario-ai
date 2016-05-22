@@ -1,8 +1,13 @@
 local State = {}
 State.__index = State
 
-function State.new(screen, score, countLifes, levelBeatenStatus, marioGameStatus, playerX, marioImage, isLevelEnding, action, reward)
+function State.new(id, screen, score, countLifes, levelBeatenStatus, marioGameStatus, playerX, marioImage, isLevelEnding, action, reward)
     local self = setmetatable({}, State)
+    if id == nil then
+        id = STATS.STATE_ID
+        STATS.STATE_ID = STATS.STATE_ID + 1
+    end
+    self.id = id
     self.screen = screen
     self.score = score
     self.countLifes = countLifes

@@ -63,6 +63,7 @@ P_EXPLORE_START = 0.8
 P_EXPLORE_END = 0.1
 P_EXPLORE_END_AT = 400000
 STATS = {
+    STATE_ID = 1,
     FRAME_COUNTER = 0,
     ACTION_COUNTER = 0,
     CURRENT_DIRECT_REWARD_SUM = 0,
@@ -171,7 +172,7 @@ function on_frame_emulated()
     if lastState == nil then print("[NOTE] lastState is nil") end
     if lastLastState == nil then print("[NOTE] lastLastState is nil") end
 
-    local state = State.new(getScreenCompressed(), util.getCurrentScore(), util.getCountLifes(), util.getLevelBeatenStatus(), util.getMarioGameStatus(), util.getPlayerX(), util.getMarioImage(), util.isLevelEnding())
+    local state = State.new(nil, getScreenCompressed(), util.getCurrentScore(), util.getCountLifes(), util.getLevelBeatenStatus(), util.getMarioGameStatus(), util.getPlayerX(), util.getMarioImage(), util.isLevelEnding())
     states.addEntry(state) -- getLastEntries() depends on this, don't move it after the next code block
     --print("Score:", score, "Level:", util.getLevel(), "x:", playerX, "status:", marioGameStatus, "levelBeatenStatus:", levelBeatenStatus, "count lifes:", countLifes)
     --print("Mario Image", util.getMarioImage())
@@ -190,6 +191,10 @@ function on_frame_emulated()
     local ac1000 = STATS.ACTION_COUNTER % 1000
     local validation = (ac1000 >= 750 and ac1000 < 800) or (ac1000 >= 950 and ac1000 < 1000)
     memory.addEntry(pastStates, state, validation)
+
+    -- show state chain
+    -- must happen before training as it might depend on network's current output
+    display.image(states.stateChainToImage(states.getLastEntries(STATES_PER_EXAMPLE), Q), {win=17, title="Last states"})
 
     -- plot average rewards
     if STATS.ACTION_COUNTER % 3 == 0 then
@@ -235,7 +240,10 @@ function on_frame_emulated()
         --print(string.format("4st: %.4f", memory.data[4][2].reward and rewards.getSumExpected(memory.data[4][2].reward) or 123.456))
         --print(string.format("5st: %.4f", memory.data[5][2].reward and rewards.getSumExpected(memory.data[5][2].reward) or 123.456))
         --print("Done.")
+    end
 
+    if (STATS.ACTION_COUNTER == 250 and memory.isTrainDataFull())
+        or STATS.ACTION_COUNTER % 5000 == 0 then
         --print("Training AE...")
         --for i=1,25 do
         --    trainAE()
@@ -249,12 +257,12 @@ function on_frame_emulated()
         for i=1,nTrainingGroups do
             local sumLossTrain = 0
             local sumLossVal = 0
-            for i=1,nTrainBatchesPerGroup do
+            for j=1,nTrainBatchesPerGroup do
                 local loss = trainOneBatch()
                 sumLossTrain = sumLossTrain + loss
-                print(string.format("[BATCH] loss=%.8f", loss))
+                print(string.format("[BATCH %d/%d] loss=%.8f", (i-1)*nTrainBatchesPerGroup + j, nTrainingBatches, loss))
             end
-            for i=1,nValBatchesPerGroup do
+            for j=1,nValBatchesPerGroup do
                 sumLossVal = sumLossVal + valOneBatch()
             end
             table.insert(STATS.AVERAGE_LOSS_DATA, {#STATS.AVERAGE_LOSS_DATA+1, sumLossTrain/nTrainBatchesPerGroup, sumLossVal/nValBatchesPerGroup})
@@ -298,6 +306,8 @@ function on_frame_emulated()
         actions.endAllActions()
         actions.startAction(state.action)
     end
+
+
 
     -- decay exploration rate
     local pPassed = math.min(STATS.ACTION_COUNTER / P_EXPLORE_END_AT, 1.0)

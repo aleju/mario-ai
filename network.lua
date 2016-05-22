@@ -3,7 +3,7 @@ require 'paths'
 require 'nn'
 require 'layers.Residual'
 require 'layers.PrintSize'
-require 'layers.BilinearSamplerBHWD2'
+require 'layers.L2Penalty'
 require 'stn'
 
 local network = {}
@@ -1157,19 +1157,21 @@ function network.createQ10()
     end
 
     local function weights_init(m)
-        local name = torch.type(m)
+        if m.dontInitialize ~= nil then
+            local name = torch.type(m)
 
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.3, 0.03) end
-            if m.bias then m.bias:fill(0) end
+            if name:find('Convolution') then
+                m.weight:normal(0.0, 0.05)
+                --m.bias:fill(0)
+                m.bias:normal(0.0, 0.05)
+            elseif name:find('Linear') then
+                m.weight:normal(0.0, 0.05)
+                --m.bias:fill(0)
+                m.bias:normal(0.0, 0.05)
+            elseif name:find('BatchNormalization') then
+                if m.weight then m.weight:normal(0.3, 0.03) end
+                if m.bias then m.bias:fill(0) end
+            end
         end
     end
     net:apply(weights_init)
@@ -1509,7 +1511,6 @@ function network.displayBatch(images, windowId, title, width)
 end
 
 
-
 -- from https://github.com/torch/DEPRECEATED-torch7-distro/issues/47
 -- Resize the output, gradInput, etc temporary tensors to zero (so that the on disk size is smaller)
 function network.prepareNetworkForSave(node)
@@ -1585,24 +1586,45 @@ function network.createSpatialTransformer(allow_rotation, allow_scaling, allow_t
     -- Create localization network
     local net = nn.Sequential()
     --net:add(nn.PrintSize("localizer"))
-    net:add(nn.SpatialConvolution(input_channels, 16, 3, 3, 2, 2, (3-1)/2))
-    net:add(nn.SpatialBatchNormalization(16))
+    net:add(nn.SpatialConvolution(input_channels, 32, 5, 5, 2, 2, (5-1)/2))
+    net:add(nn.SpatialBatchNormalization(32))
+    --net:add(nn.L1Penalty(1e-8))
     net:add(nn.LeakyReLU(0.2, true))
-    net:add(nn.SpatialConvolution(16, 16, 3, 3, 2, 2, (3-1)/2))
-    net:add(nn.SpatialBatchNormalization(16))
+    --net:add(nn.SpatialMaxPooling(2, 2))
+
+    net:add(nn.SpatialConvolution(32, 32, 5, 5, 2, 2, (5-1)/2))
+    net:add(nn.SpatialBatchNormalization(32))
+    --net:add(nn.L1Penalty(1e-6))
     net:add(nn.LeakyReLU(0.2, true))
+    --net:add(nn.SpatialMaxPooling(2, 2))
+
+    --[[
+    local classifier = nn.SpatialConvolution(16, nbr_params, 8, 8, 8, 8, (8-1)/2)
+    net:add(classifier)
+    net:add(nn.Reshape(nbr_params))
+    --]]
 
     local newHeight = input_size/2/2
-    net:add(nn.Reshape(16 * newHeight * newHeight)) -- must be reshape, nn.View converts (1, 16*H*W) to (16*H*W)
-    net:add(nn.Linear(16 * newHeight * newHeight, 64))
+    net:add(nn.Dropout(0.25))
+    net:add(nn.Reshape(32 * newHeight * newHeight)) -- must be reshape, nn.View converts (1, 16*H*W) to (16*H*W)
+    net:add(nn.Linear(32 * newHeight * newHeight, 128))
+    net:add(nn.L2Penalty(1e-8))
     net:add(nn.LeakyReLU(0.2, true))
-    local classifier = nn.Linear(64, nbr_params)
+    net:add(nn.Linear(128, 128))
+    net:add(nn.Dropout(0.25))
+    net:add(nn.L2Penalty(1e-4))
+    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.Dropout(0.25))
+    local classifier = nn.Linear(128, nbr_params)
     net:add(classifier)
+    --net:add(nn.L1Penalty(1e-6))
 
     --net = require('weight-init')(net, 'heuristic')
     -- Initialize the localization network (see paper, A.3 section)
     classifier.weight:zero()
+    --classifier.weight:normal(0, 0.001)
     classifier.bias = torch.Tensor(init_bias)
+    classifier.dontInitialize = true
 
     local localization_network = net
 

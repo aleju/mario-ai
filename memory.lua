@@ -27,6 +27,10 @@ function memory.save()
     torch.save(fp, {valData=memory.valData, trainData=memory.trainData})
 end
 
+function memory.isTrainDataFull()
+    return #memory.trainData == memory.MEMORY_MAX_SIZE_TRAINING
+end
+
 -- reorder states so that those with highest absolute(!) reward are at the top,
 -- i.e. very high (level finished, killed mobs) or very low (death) rewards
 --[[
