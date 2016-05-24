@@ -77,17 +77,17 @@ LAST_SAVE_STATE_LOAD = 0
 
 print("Loading/Creating network...")
 Q_L2_NORM = 1e-6
-Q_CLAMP = 10
+Q_CLAMP = 5
 Q = network.createOrLoadQ()
 
 PARAMETERS, GRAD_PARAMETERS = Q:getParameters()
 --CRITERION = nn.ForgivingAbsCriterion()
 CRITERION = nn.ForgivingMSECriterion()
 --CRITERION = nn.MSECriterion()
-OPTCONFIG = {learningRate=0.001, beta1=0.9, beta2=0.999}
-DECAY = 1.0
+OPTCONFIG = {learningRate=0.001*0.1, beta1=0.0, beta2=0.999}
 --OPTCONFIG = {learningRate=0.001, momentum=0.9}
 OPTSTATE = {}
+DECAY = 1.0
 
 --MODEL_AE, CRITERION_AE_LATENT, CRITERION_AE_RECONSTRUCTION, PARAMETERS_AE, GRAD_PARAMETERS_AE = VAE.createVAE()
 --OPTCONFIG_AE = { learningRate=0.001 }
@@ -221,7 +221,7 @@ function on_frame_emulated()
     end
     --]]
     --print("Before plotAvg")
-    if STATS.ACTION_COUNTER % states.MAX_SIZE == 0 then
+    if STATS.ACTION_COUNTER % 1000 == 0 then
         local directRewardSum = 0
         local observedGammaRewardSum = 0
         local expectedGammaRewardSum = 0
@@ -276,15 +276,18 @@ function on_frame_emulated()
         for i=1,nTrainingGroups do
             local sumLossTrain = 0
             local sumLossVal = 0
-            for j=1,nTrainBatchesPerGroup do
-                local loss = trainOneBatch()
-                sumLossTrain = sumLossTrain + loss
-                print(string.format("[BATCH %d/%d] loss=%.8f", (i-1)*nTrainBatchesPerGroup + j, nTrainingBatches, loss))
-            end
+            local batchStart = (i-1)*nTrainBatchesPerGroup
+            local batchEnd = math.min(batchStart + nTrainBatchesPerGroup, nTrainingBatches)
+            sumLossTrain = trainBatches(batchStart, batchEnd, nTrainingBatches)
+            --for j=1,nTrainBatchesPerGroup do
+            --    local loss = trainBatches()
+            --    sumLossTrain = sumLossTrain + loss
+            --end
             for j=1,nValBatchesPerGroup do
                 sumLossVal = sumLossVal + valOneBatch()
             end
-            table.insert(STATS.AVERAGE_LOSS_DATA, {#STATS.AVERAGE_LOSS_DATA+1, sumLossTrain/nTrainBatchesPerGroup, sumLossVal/nValBatchesPerGroup})
+            --table.insert(STATS.AVERAGE_LOSS_DATA, {#STATS.AVERAGE_LOSS_DATA+1, sumLossTrain/nTrainBatchesPerGroup, sumLossVal/nValBatchesPerGroup})
+            table.insert(STATS.AVERAGE_LOSS_DATA, {#STATS.AVERAGE_LOSS_DATA+1, sumLossTrain, sumLossVal/nValBatchesPerGroup})
             plotAverageLoss()
         end
 
@@ -367,11 +370,24 @@ function on_frame_emulated()
 end
 
 function plotAverageReward()
-    display.plot(STATS.AVERAGE_REWARD_DATA, {win=3, labels={'action counter', 'direct', 'observed gamma', 'expected gamma'}, title='Average rewards per N actions'})
+    local points = {}
+    for i=1,#STATS.AVERAGE_REWARD_DATA do
+        local point = STATS.AVERAGE_REWARD_DATA[i]
+        local direct = math.max(math.min(point[2], 10.0), -10.0)
+        local observedGamma = math.max(math.min(point[3], 10.0), -10.0)
+        local expectedGamma = math.max(math.min(point[4], 10.0), -10.0)
+        table.insert(points, {point[1], direct, observedGamma, expectedGamma})
+    end
+    display.plot(points, {win=3, labels={'action counter', 'direct', 'observed gamma', 'expected gamma'}, title='Average rewards per N actions'})
 end
 
 function plotAverageLoss()
-    display.plot(STATS.AVERAGE_LOSS_DATA, {win=4, labels={'batch group', 'training', 'validation'}, title='Average loss per batch'})
+    local losses = {}
+    for i=1,#STATS.AVERAGE_LOSS_DATA do
+        local entry = STATS.AVERAGE_LOSS_DATA[i]
+        table.insert(losses, {entry[1], math.min(entry[2], 10.0), math.min(entry[3], 10.0)})
+    end
+    display.plot(losses, {win=4, labels={'batch group', 'training', 'validation'}, title='Average loss per batch'})
 end
 
 function getScreen()
@@ -421,35 +437,49 @@ function trainAE()
     VAE.train(batchInput, MODEL_AE, CRITERION_AE_LATENT, CRITERION_AE_RECONSTRUCTION, PARAMETERS_AE, GRAD_PARAMETERS_AE, OPTCONFIG_AE, OPTSTATE_AE)
 end
 
-function trainOneBatch()
-    -- Train
+function trainBatches(batchStart, batchEnd, batchEndAll)
+    local nBatches = batchEnd - batchStart
     if memory.getCountEntriesCached(false) >= memory.MEMORY_TRAINING_MIN_SIZE then
-        -- takes ~40% of the time
-        --    <1% load random state ids
-        --    10% load states by id
-        --    30% reevaluate rewards
-        --local timeStart = os.clock()
-        local batchInput, batchTarget, stateChains = memory.getBatch(BATCH_SIZE, false, true)
-        --print(string.format("getBatch: %.8f", os.clock()-timeStart))
+        local sumLoss = 0
+        local Q_clone = Q:clone()
 
-        -- takes ~52% of the time
-        --local timeStart = os.clock()
-        local loss = network.forwardBackwardBatch(batchInput, batchTarget)
-        --print(string.format("fwbw: %.8f", os.clock()-timeStart))
+        for i=1,nBatches do
+            -- takes ~40% of the time
+            --    <1% load random state ids
+            --    10% load states by id
+            --    30% reevaluate rewards
+            --local timeStart = os.clock()
+            local batchInput, batchTarget, stateChains = memory.getBatch(BATCH_SIZE, false, true, Q_clone)
+            --print(string.format("getBatch: %.8f", os.clock()-timeStart))
 
-        -- takes ~7% of the time
-        --local timeStart = os.clock()
-        display.image(states.stateChainsToImage(stateChains, Q, 1, 1), {win=18, title="Last training batch, 1st example"})
-        --print(string.format("plot: %.8f", os.clock()-timeStart))
+            -- takes ~52% of the time
+            --local timeStart = os.clock()
+            local loss = network.forwardBackwardBatch(batchInput, batchTarget)
+            sumLoss = sumLoss + loss
+            --print(string.format("fwbw: %.8f", os.clock()-timeStart))
+            print(string.format("[BATCH %d/%d] loss=%.8f", batchStart+i-1, batchEndAll, loss))
 
-        return loss
+            -- takes ~7% of the time
+            --local timeStart = os.clock()
+            display.image(states.stateChainsToImage(stateChains, Q, 1, 1), {win=18, title="Last training batch, 1st example"})
+            --print(string.format("plot: %.8f", os.clock()-timeStart))
+        end
+
+        Q_clone = nil
+
+        return sumLoss / nBatches
     else
         return 0
     end
 end
 
+function trainOneBatch()
+    -- Train
+
+end
+
 function valOneBatch()
-    if memory.getCountEntries(true) >= BATCH_SIZE then
+    if memory.getCountEntriesCached(true) >= BATCH_SIZE then
         local batchInput, batchTarget = memory.getBatch(BATCH_SIZE, true, true)
         return network.batchToLoss(batchInput, batchTarget)
     else

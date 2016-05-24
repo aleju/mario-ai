@@ -4,6 +4,7 @@ require 'nn'
 require 'layers.Residual'
 require 'layers.PrintSize'
 require 'layers.L2Penalty'
+require 'layers.AddConstantTensor'
 require 'stn'
 
 local network = {}
@@ -1124,7 +1125,7 @@ function network.createQ10()
     lastImage:add(conv(256, 64, 3, 1))
     local liParallel = nn.Concat(2)
     local localizedNet = nn.Sequential()
-    localizedNet:add(network.createSpatialTransformer(false, true, true, hL/2, 64, GPU))
+    localizedNet:add(network.createSpatialTransformer3(false, true, true, hL/2, 64, GPU))
     localizedNet:add(conv(64, 64, 3, 2))
     localizedNet:add(conv(64, 32, 3, 1))
     local localizedNetSize = 32*hL/2/2*wL/2/2
@@ -1145,11 +1146,21 @@ function network.createQ10()
     local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
     net:add(parallel)
     net:add(nn.JoinTable(1, 1))
+    net:add(nn.Dropout(0.25))
 
     net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 512))
-    net:add(nn.L1Penalty(1e-8))
-    net:add(nn.LeakyReLU(0.2, true))
+    --net:add(nn.L1Penalty(1e-8))
+    net:add(nn.BatchNormalization(512))
+    --net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.Tanh())
+    net:add(nn.L2Penalty(1e-8))
+    --net:add(nn.L2Penalty(1e-10, false))
+    net:add(nn.Dropout(0.5))
+
     net:add(nn.Linear(512, #actions.ACTIONS_NETWORK))
+    --net:add(nn.Tanh())
+    --net:add(nn.MulConstant(50))
+    net:add(nn.L1Penalty(1e-8, false))
 
     if GPU then
         net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
@@ -1157,17 +1168,21 @@ function network.createQ10()
     end
 
     local function weights_init(m)
-        if m.dontInitialize ~= nil then
+        if m.dontInitialize == nil then
             local name = torch.type(m)
 
             if name:find('Convolution') then
                 m.weight:normal(0.0, 0.05)
                 --m.bias:fill(0)
-                m.bias:normal(0.0, 0.05)
+                if m.bias ~= nil then
+                    m.bias:normal(0.0, 0.05)
+                end
             elseif name:find('Linear') then
                 m.weight:normal(0.0, 0.05)
                 --m.bias:fill(0)
-                m.bias:normal(0.0, 0.05)
+                if m.bias ~= nil then
+                    m.bias:normal(0.0, 0.05)
+                end
             elseif name:find('BatchNormalization') then
                 if m.weight then m.weight:normal(0.3, 0.03) end
                 if m.bias then m.bias:fill(0) end
@@ -1227,8 +1242,8 @@ function network.forwardBackwardBatch(batchInput, batchTarget)
 end
 
 function network.batchToLoss(batchInput, batchTarget)
-    Q:training()
-    --Q:evaluate()
+    --Q:training()
+    Q:evaluate()
     local batchOutput = Q:forward(batchInput)
     local err = CRITERION:forward(batchOutput, batchTarget)
     err = network.l2(PARAMETERS, nil, err, Q_L2_NORM)
@@ -1251,11 +1266,11 @@ function network.approximateActionValues(stateChain)
     return out
 end
 
-function network.approximateActionValuesBatch(stateChains)
-    Q:training()
-    --Q:evaluate()
+function network.approximateActionValuesBatch(stateChains, net)
+    net = net or Q
+    net:evaluate()
     local batchInput = network.stateChainsToBatchInput(stateChains)
-    local result = Q:forward(batchInput)
+    local result = net:forward(batchInput)
     local out = {}
     for i=1,result:size(1) do
         out[i] = network.networkVectorToActionValues(result[i])
@@ -1325,9 +1340,10 @@ function network.approximateBestAction(stateChain)
     return Action.new(bestArrowIdx, bestButtonIdx), (bestArrowValue+bestButtonValue)/2
 end
 
-function network.approximateBestActionsBatch(stateChains)
+function network.approximateBestActionsBatch(stateChains, net)
+    net = net or Q
     local result = {}
-    local valuesBatch = network.approximateActionValuesBatch(stateChains)
+    local valuesBatch = network.approximateActionValuesBatch(stateChains, net)
     for i=1,#valuesBatch do
         local values = valuesBatch[i]
 
@@ -1551,8 +1567,8 @@ end
 -- Create a new spatial transformer network.
 -- From: https://github.com/Moodstocks/gtsrb.torch/blob/master/networks.lua
 -- @param allow_rotation Whether to allow the spatial transformer to rotate the image.
--- @param allow_rotation Whether to allow the spatial transformer to scale (zoom) the image.
--- @param allow_rotation Whether to allow the spatial transformer to translate (shift) the image.
+-- @param allow_scaling Whether to allow the spatial transformer to scale (zoom) the image.
+-- @param allow_translation Whether to allow the spatial transformer to translate (shift) the image.
 -- @param input_size Height/width of input images.
 -- @param input_channels Number of channels of the image.
 -- @param cuda Whether to activate cuda mode.
@@ -1580,7 +1596,8 @@ function network.createSpatialTransformer(allow_rotation, allow_scaling, allow_t
     if nbr_params == 0 then
         -- fully parametrized case
         nbr_params = 6
-        init_bias = {1,0,0,0,1,0}
+        init_bias = {1,0,0,
+                     0,1,0}
     end
 
     -- Create localization network
@@ -1589,13 +1606,13 @@ function network.createSpatialTransformer(allow_rotation, allow_scaling, allow_t
     net:add(nn.SpatialConvolution(input_channels, 32, 5, 5, 2, 2, (5-1)/2))
     net:add(nn.SpatialBatchNormalization(32))
     --net:add(nn.L1Penalty(1e-8))
-    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.ELU(1.0, true))
     --net:add(nn.SpatialMaxPooling(2, 2))
 
     net:add(nn.SpatialConvolution(32, 32, 5, 5, 2, 2, (5-1)/2))
     net:add(nn.SpatialBatchNormalization(32))
     --net:add(nn.L1Penalty(1e-6))
-    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.ELU(1.0, true))
     --net:add(nn.SpatialMaxPooling(2, 2))
 
     --[[
@@ -1605,16 +1622,19 @@ function network.createSpatialTransformer(allow_rotation, allow_scaling, allow_t
     --]]
 
     local newHeight = input_size/2/2
-    net:add(nn.Dropout(0.25))
+    net:add(nn.SpatialDropout(0.1))
     net:add(nn.Reshape(32 * newHeight * newHeight)) -- must be reshape, nn.View converts (1, 16*H*W) to (16*H*W)
+
     net:add(nn.Linear(32 * newHeight * newHeight, 128))
-    net:add(nn.L2Penalty(1e-8))
-    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.L2Penalty(1e-5))
+    net:add(nn.Tanh())
+    net:add(nn.Dropout(0.25))
+
     net:add(nn.Linear(128, 128))
+    net:add(nn.L2Penalty(1e-2))
+    net:add(nn.Tanh())
     net:add(nn.Dropout(0.25))
-    net:add(nn.L2Penalty(1e-4))
-    net:add(nn.LeakyReLU(0.2, true))
-    net:add(nn.Dropout(0.25))
+
     local classifier = nn.Linear(128, nbr_params)
     net:add(classifier)
     --net:add(nn.L1Penalty(1e-6))
@@ -1624,6 +1644,285 @@ function network.createSpatialTransformer(allow_rotation, allow_scaling, allow_t
     classifier.weight:zero()
     --classifier.weight:normal(0, 0.001)
     classifier.bias = torch.Tensor(init_bias)
+    classifier.dontInitialize = true
+
+    local localization_network = net
+
+    -- Create the actual module structure
+    -- branch1 is basically an identity matrix
+    -- branch2 estimates the necessary rotation/scaling/translation (above localization network)
+    -- They both feed into the BilinearSampler, which transforms the image
+    local ct = nn.ConcatTable()
+    local branch1 = nn.Sequential()
+    --branch1:add(nn.Identity())
+    --branch1:add(nn.PrintSize())
+    branch1:add(nn.Transpose({3,4},{2,4}))
+    --branch1:add(nn.PrintSize())
+    -- see (1) below
+    if cuda then
+        branch1:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
+    end
+    local branch2 = nn.Sequential()
+    branch2:add(localization_network)
+    --branch2:add(nn.PrintSize("after localizer"))
+    branch2:add(nn.AffineTransformMatrixGenerator(allow_rotation, allow_scaling, allow_translation))
+    --branch2:add(nn.PrintSize("after affine matrix gen"))
+    branch2:add(nn.AffineGridGeneratorBHWD(input_size, input_size))
+    --branch2:add(nn.PrintSize("after affine grid gen"))
+    -- see (1) below
+    if cuda then
+        branch2:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
+    end
+    ct:add(branch1)
+    ct:add(branch2)
+
+    local st = nn.Sequential()
+    st:add(ct)
+    local sampler = nn.BilinearSamplerBHWD()
+    -- (1)
+    -- The sampler lead to non-reproducible results on GPU
+    -- We want to always keep it on CPU
+    -- This does no lead to slowdown of the training
+    if cuda then
+        sampler:type('torch.FloatTensor')
+        -- make sure it will not go back to the GPU when we call
+        -- ":cuda()" on the network later
+        sampler.type = function(type) return self end
+        --st:add(nn.PrintSize())
+        st:add(sampler)
+        st:add(nn.Copy('torch.FloatTensor','torch.CudaTensor', true, true))
+    else
+        st:add(sampler)
+    end
+    st:add(nn.Transpose({2,4},{3,4}))
+
+    return st
+end
+
+-- Create a new spatial transformer network.
+-- From: https://github.com/Moodstocks/gtsrb.torch/blob/master/networks.lua
+-- @param allow_rotation Whether to allow the spatial transformer to rotate the image.
+-- @param allow_scaling Whether to allow the spatial transformer to scale (zoom) the image.
+-- @param allow_translation Whether to allow the spatial transformer to translate (shift) the image.
+-- @param input_size Height/width of input images.
+-- @param input_channels Number of channels of the image.
+-- @param cuda Whether to activate cuda mode.
+function network.createSpatialTransformer2(allow_rotation, allow_scaling, allow_translation, input_size, input_channels, cuda)
+    if cuda == nil then
+        cuda = true
+    end
+
+    -- Get number of params and initial state
+    local init_bias = {}
+    local nbr_params = 0
+    if allow_rotation then
+        nbr_params = nbr_params + 1
+        init_bias[nbr_params] = 0
+    end
+    if allow_scaling then
+        nbr_params = nbr_params + 1
+        init_bias[nbr_params] = 0.66
+    end
+    if allow_translation then
+        nbr_params = nbr_params + 2
+        init_bias[nbr_params-1] = 0
+        init_bias[nbr_params] = 0
+    end
+    if nbr_params == 0 then
+        -- fully parametrized case
+        nbr_params = 6
+        init_bias = {1,0,0,
+                     0,1,0}
+    end
+
+    -- Create localization network
+    local net = nn.Sequential()
+    --net:add(nn.PrintSize("localizer"))
+    net:add(nn.SpatialConvolution(input_channels, 32, 5, 5, 2, 2, (5-1)/2))
+    net:add(nn.SpatialBatchNormalization(32))
+    net:add(nn.LeakyReLU(0.2, true))
+
+    net:add(nn.SpatialConvolution(32, 32, 5, 5, 2, 2, (5-1)/2))
+    net:add(nn.SpatialBatchNormalization(32))
+    net:add(nn.LeakyReLU(0.2, true))
+
+    --[[
+    local classifier = nn.SpatialConvolution(16, nbr_params, 8, 8, 8, 8, (8-1)/2)
+    net:add(classifier)
+    net:add(nn.Reshape(nbr_params))
+    --]]
+
+    local newHeight = input_size/2/2
+    net:add(nn.SpatialDropout(0.1))
+    net:add(nn.Reshape(32 * newHeight * newHeight)) -- must be reshape, nn.View converts (1, 16*H*W) to (16*H*W)
+
+    net:add(nn.Linear(32 * newHeight * newHeight, 128))
+    net:add(nn.L2Penalty(1e-6, false))
+    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.Dropout(0.25))
+
+    net:add(nn.Linear(128, 128))
+    net:add(nn.L2Penalty(1e-6, false))
+    net:add(nn.LeakyReLU(0.2, true))
+
+    local classifier = nn.Linear(128, nbr_params)
+    net:add(classifier)
+    net:add(nn.L2Penalty(1e-2, false))
+    --local constant_tnsr = torch.Tensor(nbr_params)
+    --constant_tnsr[{1,nbr_params}] = init_bias
+    local constant_tnsr = torch.Tensor(init_bias)
+    net:add(nn.AddConstantTensor(constant_tnsr))
+    --net:add(nn.L1Penalty(1e-6))
+
+    --net = require('weight-init')(net, 'heuristic')
+    -- Initialize the localization network (see paper, A.3 section)
+    classifier.weight:zero()
+    --classifier.weight:normal(0, 0.001)
+    --classifier.bias = torch.zeros(nbr_params)
+    classifier:noBias()
+    classifier.dontInitialize = true
+
+    local localization_network = net
+
+    -- Create the actual module structure
+    -- branch1 is basically an identity matrix
+    -- branch2 estimates the necessary rotation/scaling/translation (above localization network)
+    -- They both feed into the BilinearSampler, which transforms the image
+    local ct = nn.ConcatTable()
+    local branch1 = nn.Sequential()
+    --branch1:add(nn.Identity())
+    --branch1:add(nn.PrintSize())
+    branch1:add(nn.Transpose({3,4},{2,4}))
+    --branch1:add(nn.PrintSize())
+    -- see (1) below
+    if cuda then
+        branch1:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
+    end
+    local branch2 = nn.Sequential()
+    branch2:add(localization_network)
+    --branch2:add(nn.PrintSize("after localizer"))
+    branch2:add(nn.AffineTransformMatrixGenerator(allow_rotation, allow_scaling, allow_translation))
+    --branch2:add(nn.PrintSize("after affine matrix gen"))
+    branch2:add(nn.AffineGridGeneratorBHWD(input_size, input_size))
+    --branch2:add(nn.PrintSize("after affine grid gen"))
+    -- see (1) below
+    if cuda then
+        branch2:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
+    end
+    ct:add(branch1)
+    ct:add(branch2)
+
+    local st = nn.Sequential()
+    st:add(ct)
+    local sampler = nn.BilinearSamplerBHWD()
+    -- (1)
+    -- The sampler lead to non-reproducible results on GPU
+    -- We want to always keep it on CPU
+    -- This does no lead to slowdown of the training
+    if cuda then
+        sampler:type('torch.FloatTensor')
+        -- make sure it will not go back to the GPU when we call
+        -- ":cuda()" on the network later
+        sampler.type = function(type) return self end
+        --st:add(nn.PrintSize())
+        st:add(sampler)
+        st:add(nn.Copy('torch.FloatTensor','torch.CudaTensor', true, true))
+    else
+        st:add(sampler)
+    end
+    st:add(nn.Transpose({2,4},{3,4}))
+
+    return st
+end
+
+-- Create a new spatial transformer network.
+-- From: https://github.com/Moodstocks/gtsrb.torch/blob/master/networks.lua
+-- @param allow_rotation Whether to allow the spatial transformer to rotate the image.
+-- @param allow_scaling Whether to allow the spatial transformer to scale (zoom) the image.
+-- @param allow_translation Whether to allow the spatial transformer to translate (shift) the image.
+-- @param input_size Height/width of input images.
+-- @param input_channels Number of channels of the image.
+-- @param cuda Whether to activate cuda mode.
+function network.createSpatialTransformer3(allow_rotation, allow_scaling, allow_translation, input_size, input_channels, cuda)
+    if cuda == nil then
+        cuda = true
+    end
+
+    -- Get number of params and initial state
+    local init_bias = {}
+    local nbr_params = 0
+    if allow_rotation then
+        nbr_params = nbr_params + 1
+        init_bias[nbr_params] = 0
+    end
+    if allow_scaling then
+        nbr_params = nbr_params + 1
+        init_bias[nbr_params] = 0.5
+    end
+    if allow_translation then
+        nbr_params = nbr_params + 2
+        init_bias[nbr_params-1] = 0
+        init_bias[nbr_params] = 0
+    end
+    if nbr_params == 0 then
+        -- fully parametrized case
+        nbr_params = 6
+        init_bias = {1,0,0,
+                     0,1,0}
+    end
+
+    -- Create localization network
+    local net = nn.Sequential()
+    --net:add(nn.PrintSize("localizer"))
+    net:add(nn.SpatialConvolution(input_channels, 32, 5, 5, 2, 2, (5-1)/2)) --> 16x16
+    net:add(nn.SpatialBatchNormalization(32))
+    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.SpatialDropout(0.1))
+    --net:add(nn.L1Penalty(1e-8, false))
+
+    net:add(nn.SpatialConvolution(32, 64, 3, 3, 2, 2, (3-1)/2)) --> 8x8
+    net:add(nn.SpatialBatchNormalization(64))
+    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.SpatialDropout(0.1))
+    --net:add(nn.L1Penalty(1e-8, false))
+
+    net:add(nn.SpatialConvolution(64, 64, 3, 3, 2, 2, (3-1)/2)) --> 4x4
+    net:add(nn.SpatialBatchNormalization(64))
+    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.Dropout(0.5))
+    --net:add(nn.L1Penalty(1e-8, false))
+
+    --[[
+    local classifier = nn.SpatialConvolution(16, nbr_params, 8, 8, 8, 8, (8-1)/2)
+    net:add(classifier)
+    net:add(nn.Reshape(nbr_params))
+    --]]
+
+    local newHeight = input_size/2/2/2
+    net:add(nn.Reshape(64 * newHeight * newHeight)) -- must be reshape, nn.View converts (1, 16*H*W) to (16*H*W)
+
+    net:add(nn.Linear(64 * newHeight * newHeight, 256):noBias())
+    net:add(nn.BatchNormalization(256))
+    net:add(nn.LeakyReLU(0.2, true))
+    net:add(nn.Dropout(0.5))
+    --net:add(nn.L2Penalty(1e-8, false))
+
+    local classifier = nn.Linear(256, nbr_params)
+    net:add(classifier)
+    net:add(nn.Tanh())
+    net:add(nn.L2Penalty(1e-3, false))
+    --local constant_tnsr = torch.Tensor(nbr_params)
+    --constant_tnsr[{1,nbr_params}] = init_bias
+    local constant_tnsr = torch.Tensor(init_bias)
+    net:add(nn.AddConstantTensor(constant_tnsr))
+    --net:add(nn.L1Penalty(1e-6))
+
+    --net = require('weight-init')(net, 'heuristic')
+    -- Initialize the localization network (see paper, A.3 section)
+    classifier.weight:zero()
+    --classifier.weight:normal(0, 0.001)
+    --classifier.bias = torch.zeros(nbr_params)
+    classifier:noBias()
     classifier.dontInitialize = true
 
     local localization_network = net

@@ -93,7 +93,7 @@ function memory.getMaxStateId(defaultVal)
 end
 
 function memory.isTrainDataFull()
-    return memory.getCountEntries(false) == memory.MEMORY_MAX_SIZE_TRAINING
+    return memory.getCountEntriesCached(false) >= memory.MEMORY_MAX_SIZE_TRAINING
 end
 
 function memory.reevaluateRewards()
@@ -528,9 +528,10 @@ function memory.getValidationBatch(batchSize)
     return memory.getBatch(batchSize, true)
 end
 
-function memory.getBatch(batchSize, validation, reevaluate)
+function memory.getBatch(batchSize, validation, reevaluate, Q_reevaluate)
     assert(validation == true or validation == false)
     assert(reevaluate == true or reevaluate == false)
+    Q_reevaluate = Q_reevaluate or Q
 
     local length = STATES_PER_EXAMPLE
     local loadLength = length

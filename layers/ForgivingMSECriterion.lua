@@ -1,13 +1,13 @@
 local ForgivingMSECriterion, parent = torch.class('nn.ForgivingMSECriterion', 'nn.Criterion')
 
-function ForgivingMSECriterion:__init(sizeAverage)
+function ForgivingMSECriterion:__init(forgiveness, sizeAverage)
     parent.__init(self)
     if sizeAverage ~= nil then
         self.sizeAverage = sizeAverage
     else
         self.sizeAverage = true
     end
-    self.forgiveness = 1.0
+    self.forgiveness = forgiveness or 1.0
 end
 
 --[[
