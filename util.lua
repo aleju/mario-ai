@@ -180,20 +180,28 @@ function util.toImageDimensions(img, dimensions)
     return img
 end
 
+-- Take a screenshot of the game and return it as a tensor.
+-- TODO no longer used?
+function getScreen()
+    local fp = SCREENSHOT_FILEPATH
+    gui.screenshot(fp)
+    local screen = image.load(fp, 3, "float"):clone()
+    screen = image.scale(screen, IMG_DIMENSIONS[2], IMG_DIMENSIONS[3]):clone()
+    if IMG_DIMENSIONS[1] == 1 then
+        screen = util.rgb2y(screen)
+    end
+    return screen
+end
+
+-- Take a screenshot of the game and return it jpg-compressed as a tensor.
+function getScreenCompressed()
+    local fp = SCREENSHOT_FILEPATH
+    gui.screenshot(fp)
+    return util.loadJPGCompressed(fp, IMG_DIMENSIONS[1], IMG_DIMENSIONS[2], IMG_DIMENSIONS[3])
+end
+
 function util.loadJPGCompressed(fp, channels, height, width)
     -- from https://github.com/torch/image/blob/master/doc/saveload.md
-    --[[
-    local fin = torch.DiskFile(fp, 'r')
-    fin:binary()
-    fin:seekEnd()
-    local file_size_bytes = fin:position() - 1
-    fin:seek(1)
-    local img_binary = torch.ByteTensor(file_size_bytes)
-    fin:readByte(img_binary:storage())
-    fin:close()
-    -- Then when you're ready to decompress the ByteTensor:
-    im = image.decompressJPG(img_binary, 3)
-    --]]
     local im = image.load(fp, 3, "float")
     local c, h, w = im:size(1), im:size(2), im:size(3)
     im = im[{{1,c}, {30,h}, {1,w}}] -- cut off 30px from the top

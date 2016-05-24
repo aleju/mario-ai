@@ -223,4 +223,34 @@ function actions.setJoypad2(actions)
     --end
 end
 
+function chooseAction(lastStates, perfect, bestAction, pExplore)
+    perfect = perfect or false
+    pExplore = pExplore or STATS.P_EXPLORE_CURRENT
+    local _action, _actionValue
+    if not perfect and math.random() < pExplore then
+        if bestAction == nil or math.random() < 0.5 then
+            -- randomize both
+            _action = Action.new(util.getRandomEntry(actions.ACTIONS_ARROWS), util.getRandomEntry(actions.ACTIONS_BUTTONS))
+        else
+            -- randomize only arrow or only button
+            if math.random() < 0.5 then
+                _action = Action.new(util.getRandomEntry(actions.ACTIONS_ARROWS), bestAction.button)
+            else
+                _action = Action.new(bestAction.arrow, util.getRandomEntry(actions.ACTIONS_BUTTONS))
+            end
+        end
+        --print("Chossing action randomly:", _action)
+    else
+        if bestAction ~= nil then
+            _action = bestAction
+        else
+            -- Use network to approximate action with maximal value
+            _action, _actionValue = network.approximateBestAction(lastStates)
+            --print("Q approximated action:", _action, actions.ACTION_TO_BUTTON_NAME[_action])
+        end
+    end
+
+    return _action
+end
+
 return actions
