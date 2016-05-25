@@ -1,3 +1,9 @@
+-- Network functions.
+-- E.g.:
+--   - Creating the model
+--   - Converting chains of states to training batches
+--   - Forward/backward of batches
+--   - Using the model to approximate good actions for a chain of states
 require 'torch'
 require 'paths'
 require 'nn'
@@ -9,6 +15,7 @@ require 'stn'
 
 local network = {}
 
+-- Load a saved model or return nil.
 function network.load()
     local fp = "learned/network.th7"
     if paths.filep(fp) then
@@ -20,1077 +27,24 @@ function network.load()
     end
 end
 
+-- Save the model to the save file.
 function network.save()
     network.prepareNetworkForSave(Q)
     local fp = "learned/network.th7"
     torch.save(fp, Q)
 end
 
---[[
-function network.createQ()
-    local net = nn.Sequential()
-    if GPU then
-        net:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true))
+-- Tries to load the network from the save file. If that fails, it creates a new network.
+function network.createOrLoadQ()
+    local loaded = network.load()
+    if loaded == nil then
+        return network.createQ10()
+    else
+        return loaded
     end
-    net:add(nn.SpatialConvolution(IMG_DIMENSIONS_Q[1], 8, 5, 5, 2, 2, (5-1)/2, (5-1)/2))
-    net:add(nn.ReLU())
-    net:add(nn.SpatialConvolution(8, 128, 7, 7, 4, 4, (7-1)/2, (7-1)/2))
-    net:add(nn.ReLU())
-    net:add(nn.SpatialConvolution(128, 64, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    net:add(nn.ReLU())
-    net:add(nn.SpatialConvolution(64, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    net:add(nn.ReLU())
-    net:add(nn.Dropout(0.5))
-    local outSize = 32 * (IMG_DIMENSIONS_Q[2]/2/2/2/2/2) * 2*(IMG_DIMENSIONS_Q[3]/2/2/2/2/2)
-    net:add(nn.Reshape(outSize))
-    --net:add(nn.Dropout(0.25))
-    net:add(nn.Linear(outSize, 256))
-    --net:add(nn.BatchNormalization(128))
-    net:add(nn.ReLU())
-    --net:add(nn.Linear(128, 128))
-    --net:add(nn.BatchNormalization(128))
-    --net:add(nn.LeakyReLU(0.2))
-    net:add(nn.Linear(256, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    return net
-end
---]]
-
---[[
-function network.createQ()
-    local c, h, w = unpack(IMG_DIMENSIONS_Q)
-    local net = nn.Sequential()
-    if GPU then
-        net:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true))
-    end
-    local concat = nn.Concat(2)
-    local conv1 = nn.Sequential():add(nn.SpatialConvolution(c, 32, 1, 7, 1, 1, (1-1)/2, (7-1)/2))
-    local conv2 = nn.Sequential():add(nn.SpatialConvolution(c, 64, 1, 5, 1, 1, (1-1)/2, (5-1)/2))
-    local conv3 = nn.Sequential():add(nn.SpatialConvolution(c, 16, 5, 1, 1, 1, (5-1)/2, (1-1)/2))
-    local conv4 = nn.Sequential():add(nn.SpatialConvolution(c, 16, 7, 1, 1, 1, (7-1)/2, (1-1)/2))
-    local conv5 = nn.Sequential():add(nn.SpatialConvolution(c, 16, 3, 3, 1, 1, (3-1)/2, (3-1)/2))
-    concat:add(conv1):add(conv2):add(conv3):add(conv4):add(conv5)
-    net:add(concat)
-    net:add(nn.SpatialBatchNormalization(32+64+16+16+16))
-    net:add(nn.ReLU())
-    net:add(nn.SpatialMaxPooling(2, 2))
-    --net:add(nn.L1Penalty(1e-5))
-
-    net:add(nn.SpatialConvolution(32+64+16+16+16, 32, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-    net:add(nn.SpatialBatchNormalization(32))
-    net:add(nn.ReLU())
-    net:add(nn.SpatialMaxPooling(2, 2))
-
-    net:add(nn.SpatialConvolution(32, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    net:add(nn.SpatialBatchNormalization(32))
-    net:add(nn.ReLU())
-    net:add(nn.SpatialMaxPooling(2, 2))
-    --net:add(nn.Dropout(0.5))
-
-    local outSize = 32 * (IMG_DIMENSIONS_Q[2]/2/2/2/2) * 2*(IMG_DIMENSIONS_Q[3]/2/2/2/2)
-    net:add(nn.Reshape(outSize))
-    net:add(nn.Linear(outSize, 128))
-    net:add(nn.BatchNormalization(128))
-    net:add(nn.Tanh())
-    --net:add(nn.Dropout(0.25))
-    net:add(nn.Linear(128, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    return net
-end
---]]
-
---[[
-function network.createQ()
-    local c, h, w = unpack(IMG_DIMENSIONS_Q)
-    local net = nn.Sequential()
-    if GPU then
-        net:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true))
-    end
-
-    net:add(nn.SpatialConvolution(STATES_PER_EXAMPLE, 16, 5, 5, 2, 2, (5-1)/2, (5-1)/2))
-    --net:add(nn.SpatialBatchNormalization(16))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.SpatialConvolution(16, 32, 3, 3, 1, 1, (3-1)/2, (3-1)/2))
-    --net:add(nn.SpatialBatchNormalization(32))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.SpatialMaxPooling(2, 2))
-    net:add(nn.SpatialConvolution(32, 64, 3, 3, 1, 1, (3-1)/2, (3-1)/2))
-    --net:add(nn.SpatialBatchNormalization(64))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.SpatialMaxPooling(2, 2))
-    net:add(nn.SpatialConvolution(64, 64, 3, 3, 1, 1, (3-1)/2, (3-1)/2))
-    --net:add(nn.SpatialBatchNormalization(64))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.SpatialMaxPooling(2, 2))
-
-    local outSize = 64 * (IMG_DIMENSIONS_Q[2]/2/2/2/2) * (IMG_DIMENSIONS_Q[3]/2/2/2/2)
-    net:add(nn.Reshape(outSize))
-    net:add(nn.Linear(outSize, 256))
-    --net:add(nn.BatchNormalization(256))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.Linear(256, 128))
-    --net:add(nn.BatchNormalization(128))
-    net:add(nn.Tanh())
-    --net:add(nn.Dropout(0.25))
-    net:add(nn.Linear(128, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    return net
-end
---]]
-
---[[
-function network.createQ()
-    local c, h, w = unpack(IMG_DIMENSIONS_Q)
-    local net = nn.Sequential()
-    if GPU then
-        net:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true))
-    end
-
-    net:add(nn.SpatialConvolution(STATES_PER_EXAMPLE, 64, 5, 5, 2, 2, (5-1)/2, (5-1)/2))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.SpatialConvolution(64, 128, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.SpatialConvolution(128, 256, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    net:add(nn.LeakyReLU(0.2))
-    local outSize = 256 * (h/4/2) * (w/4/2)
-    net:add(nn.Reshape(outSize))
-    net:add(nn.Linear(outSize, 512))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.Linear(512, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    return net
-end
---]]
-
---[[
-function network.createQ()
-    function createResidual(nbInputPlanes, ks)
-        local activation = function () return nn.LeakyReLU(0.2, true) end
-        ks = ks or 3
-
-        local seq = nn.Sequential()
-        local inner = nn.Sequential()
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes, nbInputPlanes/2, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-        --inner:add(nn.SpatialBatchNormalization(nbInputPlanes/2))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/2, nbInputPlanes/2, ks, ks, 1, 1, (ks-1)/2, (ks-1)/2))
-        --inner:add(nn.SpatialBatchNormalization(nbInputPlanes/2))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/2, nbInputPlanes, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-        --inner:add(nn.SpatialBatchNormalization(nbInputPlanes))
-
-        --seq:add(nn.StochasticDepth(0.2, inner))
-        --seq:add(nn.StochasticDepth(pl, inner))
-        seq:add(nn.Residual(inner))
-        seq:add(activation())
-
-        return seq
-    end
-
-    local c, h, w = unpack(IMG_DIMENSIONS_Q)
-    local net = nn.Sequential()
-    if GPU then
-        net:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true))
-    end
-
-    net:add(nn.SpatialConvolution(STATES_PER_EXAMPLE, 64, 3, 3, 1, 1, (3-1)/2, (3-1)/2))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(createResidual(64, 3))
-    net:add(createResidual(64, 3))
-    net:add(nn.SpatialConvolution(64, 128, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(createResidual(128, 3))
-    net:add(nn.SpatialConvolution(128, 128, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(createResidual(128, 3))
-    local outSize = 128 * (h/2/2) * (w/2/2)
-    net:add(nn.Reshape(outSize))
-    net:add(nn.Linear(outSize, 512))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.Linear(512, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    return net
-end
---]]
-
-function network.createQ1()
-    function createResidual(nbInputPlanes, ks)
-        local activation = function () return nn.LeakyReLU(0.2, true) end
-        ks = ks or 3
-
-        local seq = nn.Sequential()
-        local inner = nn.Sequential()
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes, nbInputPlanes/4, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes/4))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/4, nbInputPlanes/4, ks, ks, 1, 1, (ks-1)/2, (ks-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes/4))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/4, nbInputPlanes, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes))
-
-        --seq:add(nn.StochasticDepth(0.2, inner))
-        --seq:add(nn.StochasticDepth(pl, inner))
-        seq:add(nn.Residual(inner))
-        seq:add(activation())
-
-        return seq
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 64))
-    --actionHistory:add(nn.L1Penalty(1e-6))
-    actionHistory:add(nn.BatchNormalization(64))
-    actionHistory:add(nn.LeakyReLU(0.2))
-    local actionHistorySize = 64
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(cudnn.SpatialConvolution(STATES_PER_EXAMPLE, 128, 5, 5, 2, 2, (5-1)/2, (5-1)/2))
-    --imageHistory:add(nn.L1Penalty(1e-7))
-    imageHistory:add(nn.SpatialBatchNormalization(128))
-    imageHistory:add(nn.LeakyReLU(0.2))
-    imageHistory:add(cudnn.SpatialConvolution(128, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --imageHistory:add(nn.L1Penalty(1e-6))
-    imageHistory:add(nn.SpatialBatchNormalization(32))
-    imageHistory:add(nn.LeakyReLU(0.2))
-    imageHistory:add(cudnn.SpatialConvolution(32, 32, 3, 3, 1, 1, (3-1)/2, (3-1)/2))
-    --imageHistory:add(nn.L1Penalty(1e-6))
-    imageHistory:add(nn.SpatialBatchNormalization(32))
-    imageHistory:add(nn.LeakyReLU(0.2))
-    imageHistory:add(nn.Dropout(0.25))
-    local imageHistorySize = 32 * hH/4 * wH/4
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    --[[
-    lastImage:add(cudnn.SpatialConvolution(cL, 32, 3, 3, 1, 1, (3-1)/2, (3-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-8))
-    lastImage:add(nn.SpatialBatchNormalization(32))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(32, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-7))
-    lastImage:add(nn.SpatialBatchNormalization(32))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(32, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-6))
-    lastImage:add(nn.SpatialBatchNormalization(32))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(32, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-6))
-    lastImage:add(nn.SpatialBatchNormalization(32))
-    lastImage:add(nn.LeakyReLU(0.2))
-    --lastImage:add(nn.Dropout(0.25))
-    local lastImageSize = 32 * hL/2/2/2 * wL/2/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-    --]]
-    lastImage:add(cudnn.SpatialConvolution(cL, 256, 7, 7, 4, 4, (7-1)/2, (7-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-8))
-    lastImage:add(nn.SpatialBatchNormalization(256))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(256, 64, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-7))
-    lastImage:add(nn.SpatialBatchNormalization(64))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(createResidual(64, 3))
-    lastImage:add(createResidual(64, 3))
-    lastImage:add(createResidual(64, 3))
-    lastImage:add(createResidual(64, 3))
-    lastImage:add(nn.Dropout(0.25))
-    local lastImageSize = 64 * hL/2/2 * wL/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 512))
-    net:add(nn.L1Penalty(1e-6))
-    --net:add(nn.BatchNormalization(512))
-    net:add(nn.Tanh())
-    net:add(nn.Linear(512, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.02)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.02)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.02)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.02)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.2, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
 end
 
-function network.createQ2()
-    function createResidual(nbInputPlanes, ks)
-        local activation = function () return nn.LeakyReLU(0.2, true) end
-        ks = ks or 3
-
-        local seq = nn.Sequential()
-        local inner = nn.Sequential()
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes, nbInputPlanes/4, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes/4))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/4, nbInputPlanes/4, ks, ks, 1, 1, (ks-1)/2, (ks-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes/4))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/4, nbInputPlanes, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes))
-
-        --seq:add(nn.StochasticDepth(0.2, inner))
-        --seq:add(nn.StochasticDepth(pl, inner))
-        seq:add(nn.Residual(inner))
-        seq:add(activation())
-
-        return seq
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 32))
-    --actionHistory:add(nn.L1Penalty(1e-6))
-    actionHistory:add(nn.BatchNormalization(32))
-    actionHistory:add(nn.LeakyReLU(0.2))
-    local actionHistorySize = 32
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(cudnn.SpatialConvolution(STATES_PER_EXAMPLE, 64, 5, 5, 1, 1, (5-1)/2, (5-1)/2))
-    --imageHistory:add(nn.L1Penalty(1e-7))
-    imageHistory:add(nn.SpatialBatchNormalization(64))
-    imageHistory:add(nn.LeakyReLU(0.2))
-    imageHistory:add(cudnn.SpatialConvolution(64, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --imageHistory:add(nn.L1Penalty(1e-6))
-    imageHistory:add(nn.SpatialBatchNormalization(32))
-    imageHistory:add(nn.LeakyReLU(0.2))
-    imageHistory:add(cudnn.SpatialConvolution(32, 16, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --imageHistory:add(nn.L1Penalty(1e-6))
-    imageHistory:add(nn.SpatialBatchNormalization(16))
-    imageHistory:add(nn.LeakyReLU(0.2))
-    --imageHistory:add(nn.Dropout(0.25))
-    local imageHistorySize = 16 * hH/4 * wH/4
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    --[[
-    lastImage:add(cudnn.SpatialConvolution(cL, 32, 3, 3, 1, 1, (3-1)/2, (3-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-8))
-    lastImage:add(nn.SpatialBatchNormalization(32))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(32, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-7))
-    lastImage:add(nn.SpatialBatchNormalization(32))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(32, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-6))
-    lastImage:add(nn.SpatialBatchNormalization(32))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(32, 32, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-6))
-    lastImage:add(nn.SpatialBatchNormalization(32))
-    lastImage:add(nn.LeakyReLU(0.2))
-    --lastImage:add(nn.Dropout(0.25))
-    local lastImageSize = 32 * hL/2/2/2 * wL/2/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-    --]]
-    lastImage:add(cudnn.SpatialConvolution(cL, 64, 5, 5, 1, 1, (5-1)/2, (5-1)/2))
-    --lastImage:add(nn.L1Penalty(1e-8))
-    lastImage:add(nn.SpatialBatchNormalization(64))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(64, 64, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    lastImage:add(nn.SpatialBatchNormalization(64))
-    lastImage:add(nn.LeakyReLU(0.2))
-    lastImage:add(cudnn.SpatialConvolution(64, 16, 3, 3, 2, 2, (3-1)/2, (3-1)/2))
-    lastImage:add(nn.SpatialBatchNormalization(16))
-    lastImage:add(nn.LeakyReLU(0.2))
-    local lastImageSize = 16 * hL/2/2 * wL/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 256))
-    net:add(nn.L1Penalty(1e-6))
-    --net:add(nn.BatchNormalization(512))
-    net:add(nn.LeakyReLU(0.2))
-    net:add(nn.Linear(256, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.02)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.02)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.02)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.02)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.2, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
-end
-
-function network.createQ3()
-    function createResidual(nbInputPlanes, ks)
-        local activation = function () return nn.LeakyReLU(0.2, true) end
-        ks = ks or 3
-
-        local seq = nn.Sequential()
-        local inner = nn.Sequential()
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes, nbInputPlanes/2, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes/2))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/2, nbInputPlanes/2, ks, ks, 1, 1, (ks-1)/2, (ks-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes/2))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/2, nbInputPlanes, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes))
-
-        seq:add(nn.Residual(inner))
-        seq:add(activation())
-
-        return seq
-    end
-
-    function createDimChanger(nbInputPlanes, nbOutputPlanes)
-        return nn.Sequential()
-                :add(cudnn.SpatialConvolution(nbInputPlanes, nbOutputPlanes, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-                :add(nn.SpatialBatchNormalization(nbOutputPlanes))
-                :add(nn.LeakyReLU(0.2, true))
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 32))
-    actionHistory:add(nn.BatchNormalization(32))
-    actionHistory:add(nn.LeakyReLU(0.2))
-    local actionHistorySize = 32
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(cudnn.SpatialConvolution(STATES_PER_EXAMPLE, 64, 5, 5, 1, 1, (5-1)/2, (5-1)/2))
-    imageHistory:add(nn.SpatialBatchNormalization(64))
-    imageHistory:add(nn.LeakyReLU(0.2, true))
-    imageHistory:add(createResidual(64, 3))
-    imageHistory:add(nn.SpatialMaxPooling(2, 2)) -- 16x16
-    imageHistory:add(createResidual(64, 3))
-    imageHistory:add(nn.SpatialMaxPooling(2, 2)) -- 8x8
-    imageHistory:add(createResidual(64, 3))
-    imageHistory:add(nn.SpatialMaxPooling(2, 2)) -- 4x4
-    local imageHistorySize = 64 * hH/2/2/2 * wH/2/2/2
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    lastImage:add(cudnn.SpatialConvolution(cL, 64, 5, 5, 1, 1, (5-1)/2, (5-1)/2))
-    lastImage:add(nn.SpatialBatchNormalization(64))
-    lastImage:add(nn.LeakyReLU(0.2, true))
-    lastImage:add(createResidual(64, 3))
-    lastImage:add(nn.SpatialMaxPooling(2, 2)) -- 32x32
-    lastImage:add(createResidual(64, 3))
-    lastImage:add(createDimChanger(64, 128))
-    lastImage:add(nn.SpatialMaxPooling(2, 2)) -- 16x16
-    lastImage:add(createResidual(128, 3))
-    lastImage:add(createDimChanger(128, 256))
-    lastImage:add(nn.SpatialMaxPooling(2, 2)) -- 8x8
-    lastImage:add(createResidual(256, 3))
-    lastImage:add(nn.SpatialMaxPooling(2, 2)) -- 4x4
-    local lastImageSize = 256 * hL/2/2/2/2 * wL/2/2/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 128))
-    net:add(nn.L1Penalty(1e-8))
-    net:add(nn.LeakyReLU(0.2, true))
-    net:add(nn.Linear(128, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.02)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.02)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.02)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.02)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.2, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
-end
-
-function network.createQ4()
-    function createResidual(nbInputPlanes, ks)
-        local activation = function () return nn.ELU(1.0, true) end
-        ks = ks or 3
-
-        local seq = nn.Sequential()
-        local inner = nn.Sequential()
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes, nbInputPlanes/2, ks, ks, 1, 1, (ks-1)/2, (ks-1)/2))
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes/2))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes/2, nbInputPlanes, ks, ks, 1, 1, (ks-1)/2, (ks-1)/2))
-        seq:add(nn.Residual(inner))
-
-        return seq
-    end
-
-    function createDimChanger(nbInputPlanes, nbOutputPlanes)
-        return nn.Sequential()
-                :add(cudnn.SpatialConvolution(nbInputPlanes, nbOutputPlanes, 1, 1, 1, 1, (1-1)/2, (1-1)/2))
-                :add(nn.SpatialBatchNormalization(nbOutputPlanes))
-                :add(nn.ELU(1.0, true))
-    end
-
-    function createPooling(nbInputPlanes, ks)
-        local activation = function () return nn.ELU(1.0, true) end
-        ks = ks or 3
-
-        local seq = nn.Sequential()
-        local inner = nn.Sequential()
-        inner:add(nn.SpatialBatchNormalization(nbInputPlanes))
-        inner:add(activation())
-        inner:add(cudnn.SpatialConvolution(nbInputPlanes, nbInputPlanes, ks, ks, 2, 2, (ks-1)/2, (ks-1)/2))
-        local skip = nn.SpatialAveragePooling(1, 1, 2, 2)
-        seq:add(nn.Residual(inner, skip))
-
-        return seq
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 32))
-    actionHistory:add(nn.L1Penalty(1e-10))
-    actionHistory:add(nn.ELU(1.0, true))
-    local actionHistorySize = 32
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(cudnn.SpatialConvolution(STATES_PER_EXAMPLE, 64, 5, 5, 1, 1, (5-1)/2, (5-1)/2))
-    imageHistory:add(nn.SpatialBatchNormalization(64))
-    imageHistory:add(nn.ELU(1.0, true))
-    imageHistory:add(createResidual(64, 3))
-    imageHistory:add(createPooling(64)) -- 16x16
-    imageHistory:add(createResidual(64, 3))
-    imageHistory:add(createPooling(64)) -- 8x8
-    imageHistory:add(createResidual(64, 3))
-    imageHistory:add(createPooling(64)) -- 4x4
-    imageHistory:add(nn.SpatialDropout(0.1))
-    local imageHistorySize = 64 * hH/2/2/2 * wH/2/2/2
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    lastImage:add(cudnn.SpatialConvolution(cL, 64, 5, 5, 1, 1, (5-1)/2, (5-1)/2))
-    lastImage:add(nn.SpatialBatchNormalization(64))
-    lastImage:add(nn.ELU(1.0, true))
-    lastImage:add(createResidual(64, 3))
-    lastImage:add(createPooling(64)) -- 32x32
-    lastImage:add(createResidual(64, 3))
-    lastImage:add(createDimChanger(64, 128))
-    lastImage:add(createPooling(128)) -- 16x16
-    lastImage:add(createResidual(128, 3))
-    lastImage:add(createPooling(128)) -- 8x8
-    lastImage:add(createResidual(128, 3))
-    lastImage:add(createPooling(128)) -- 4x4
-    lastImage:add(nn.SpatialDropout(0.1))
-    local lastImageSize = 128 * hL/2/2/2/2 * wL/2/2/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 256))
-    net:add(nn.L1Penalty(1e-10))
-    net:add(nn.ELU(1.0, true))
-    net:add(nn.Dropout(0.1))
-    net:add(nn.Linear(256, 256))
-    net:add(nn.L1Penalty(1e-6))
-    net:add(nn.ELU(1.0, true))
-    net:add(nn.Dropout(0.1))
-    net:add(nn.Linear(256, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.03)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.03)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.3, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
-end
-
-function network.createQ5()
-    function conv(nbInputPlanes, nbOutputPlanes, ks, stride)
-        return nn.Sequential()
-                :add(cudnn.SpatialConvolution(nbInputPlanes, nbOutputPlanes, ks, ks, stride, stride, (ks-1)/2, (ks-1)/2))
-                :add(nn.SpatialBatchNormalization(nbOutputPlanes))
-                :add(nn.ELU(1.0, true))
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 32))
-    actionHistory:add(nn.BatchNormalization(32))
-    actionHistory:add(nn.ELU(1.0, true))
-    local actionHistorySize = 32
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(conv(STATES_PER_EXAMPLE, 64, 5, 1))
-    imageHistory:add(conv(64, 64, 3, 2))
-    --imageHistory:add(nn.SpatialMaxPooling(2, 2)) -- 16x16
-    imageHistory:add(conv(64, 64, 3, 2))
-    --imageHistory:add(nn.SpatialMaxPooling(2, 2)) -- 8x8
-    imageHistory:add(conv(64, 64, 3, 2))
-    --imageHistory:add(nn.SpatialMaxPooling(2, 2)) -- 4x4
-    local imageHistorySize = 64 * hH/2/2/2 * wH/2/2/2
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    lastImage:add(conv(cL, 64, 5, 1))
-    lastImage:add(conv(64, 64, 3, 2))
-    --lastImage:add(nn.SpatialMaxPooling(2, 2)) -- 32x32
-    lastImage:add(conv(64, 128, 3, 2))
-    --lastImage:add(nn.SpatialMaxPooling(2, 2)) -- 16x16
-    lastImage:add(conv(128, 256, 3, 2))
-    --lastImage:add(nn.SpatialMaxPooling(2, 2)) -- 8x8
-    lastImage:add(conv(256, 256, 3, 2))
-    --lastImage:add(nn.SpatialMaxPooling(2, 2)) -- 4x4
-    local lastImageSize = 256 * hL/2/2/2/2 * wL/2/2/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 128))
-    net:add(nn.L1Penalty(1e-8))
-    net:add(nn.ELU(1.0, true))
-    net:add(nn.Linear(128, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.3, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
-end
-
-function network.createQ6()
-    function conv(nbInputPlanes, nbOutputPlanes, ks, stride)
-        return nn.Sequential()
-                :add(cudnn.SpatialConvolution(nbInputPlanes, nbOutputPlanes, ks, ks, stride, stride, (ks-1)/2, (ks-1)/2))
-                :add(nn.SpatialBatchNormalization(nbOutputPlanes))
-                :add(nn.ELU(1.0, true))
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 32))
-    actionHistory:add(nn.BatchNormalization(32))
-    actionHistory:add(nn.ELU(1.0, true))
-    local actionHistorySize = 32
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(conv(STATES_PER_EXAMPLE, 64, 3, 1))
-    imageHistory:add(conv(64, 64, 5, 2))
-    imageHistory:add(conv(64, 64, 5, 4))
-    local imageHistorySize = 64 * hH/2/4 * wH/2/4
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    lastImage:add(conv(cL, 64, 3, 1))
-    lastImage:add(conv(64, 64, 5, 2))
-    lastImage:add(conv(64, 128, 5, 4))
-    local lastImageSize = 128 * hL/2/4 * wL/2/4
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 128))
-    net:add(nn.L1Penalty(1e-8))
-    net:add(nn.ELU(1.0, true))
-    net:add(nn.Linear(128, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.3, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
-end
-
-function network.createQ7()
-    function conv(nbInputPlanes, nbOutputPlanes, ks, stride)
-        return nn.Sequential()
-                :add(cudnn.SpatialConvolution(nbInputPlanes, nbOutputPlanes, ks, ks, stride, stride, (ks-1)/2, (ks-1)/2))
-                :add(nn.SpatialBatchNormalization(nbOutputPlanes))
-                :add(nn.LeakyReLU(0.2, true))
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 32))
-    actionHistory:add(nn.BatchNormalization(32))
-    actionHistory:add(nn.LeakyReLU(0.2, true))
-    local actionHistorySize = 32
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(conv(STATES_PER_EXAMPLE, 64, 3, 1))
-    imageHistory:add(conv(64, 64, 5, 2))
-    imageHistory:add(conv(64, 64, 5, 4))
-    local imageHistorySize = 64 * hH/2/4 * wH/2/4
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    lastImage:add(conv(cL, 64, 3, 1))
-    lastImage:add(conv(64, 64, 5, 2))
-    lastImage:add(conv(64, 128, 5, 4))
-    local lastImageSize = 128 * hL/2/4 * wL/2/4
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 512))
-    net:add(nn.L1Penalty(1e-8))
-    net:add(nn.LeakyReLU(0.2, true))
-    net:add(nn.Linear(512, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.3, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
-end
-
-function network.createQ8()
-    function conv(nbInputPlanes, nbOutputPlanes, ks, stride)
-        return nn.Sequential()
-                :add(cudnn.SpatialConvolution(nbInputPlanes, nbOutputPlanes, ks, ks, stride, stride, (ks-1)/2, (ks-1)/2))
-                :add(nn.SpatialBatchNormalization(nbOutputPlanes))
-                :add(nn.ELU(1.0, true))
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 32))
-    actionHistory:add(nn.ELU(1.0, true))
-    local actionHistorySize = 32
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(conv(STATES_PER_EXAMPLE, 64, 3, 1))
-    imageHistory:add(conv(64, 64, 5, 2))
-    imageHistory:add(conv(64, 64, 5, 4))
-    local imageHistorySize = 64 * hH/2/4 * wH/2/4
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    lastImage:add(conv(cL, 256, 7, 2))
-    lastImage:add(conv(256, 128, 3, 2))
-    lastImage:add(conv(128, 64, 3, 2))
-    local lastImageSize = 64 * hL/2/2/2 * wL/2/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 512))
-    net:add(nn.L1Penalty(1e-8))
-    net:add(nn.ELU(1.0, true))
-    net:add(nn.Linear(512, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.3, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
-end
-
-function network.createQ9()
-    function conv(nbInputPlanes, nbOutputPlanes, ks, stride)
-        return nn.Sequential()
-                :add(cudnn.SpatialConvolution(nbInputPlanes, nbOutputPlanes, ks, ks, stride, stride, (ks-1)/2, (ks-1)/2))
-                :add(nn.SpatialBatchNormalization(nbOutputPlanes))
-                :add(nn.LeakyReLU(0.2, true))
-    end
-
-    local cH, hH, wH = unpack(IMG_DIMENSIONS_Q_HISTORY)
-    local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
-    local net = nn.Sequential()
-
-    local actionHistory = nn.Sequential()
-    if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
-    actionHistory:add(nn.Linear(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK, 32))
-    actionHistory:add(nn.LeakyReLU(0.2, true))
-    local actionHistorySize = 32
-
-    local imageHistory = nn.Sequential()
-    if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    imageHistory:add(conv(STATES_PER_EXAMPLE, 64, 3, 1))
-    imageHistory:add(conv(64, 64, 5, 2))
-    imageHistory:add(conv(64, 64, 5, 4))
-    local imageHistorySize = 64 * hH/2/4 * wH/2/4
-    imageHistory:add(nn.Reshape(imageHistorySize))
-
-    local lastImage = nn.Sequential()
-    if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
-    lastImage:add(conv(cL, 256, 7, 2))
-    lastImage:add(conv(256, 128, 3, 2))
-    lastImage:add(conv(128, 64, 3, 2))
-    local lastImageSize = 64 * hL/2/2/2 * wL/2/2/2
-    lastImage:add(nn.Reshape(lastImageSize))
-
-    local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
-    net:add(parallel)
-    net:add(nn.JoinTable(1, 1))
-
-    net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 512))
-    net:add(nn.L1Penalty(1e-8))
-    net:add(nn.LeakyReLU(0.2, true))
-    net:add(nn.Linear(512, #actions.ACTIONS_NETWORK))
-
-    if GPU then
-        net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-        net:cuda()
-    end
-
-    local function weights_init(m)
-        local name = torch.type(m)
-
-        if name:find('Convolution') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('Linear') then
-            m.weight:normal(0.0, 0.05)
-            --m.bias:fill(0)
-            m.bias:normal(0.0, 0.05)
-        elseif name:find('BatchNormalization') then
-            if m.weight then m.weight:normal(0.3, 0.03) end
-            if m.bias then m.bias:fill(0) end
-        end
-    end
-    net:apply(weights_init)
-
-    return net
-end
-
+-- Create the model.
 function network.createQ10()
     function conv(nbInputPlanes, nbOutputPlanes, ks, stride)
         return nn.Sequential()
@@ -1103,6 +57,7 @@ function network.createQ10()
     local cL, hL, wL = unpack(IMG_DIMENSIONS_Q_LAST)
     local net = nn.Sequential()
 
+    -- Action history branch. deals with previously chosen action(-ids).
     local actionHistory = nn.Sequential()
     if GPU then actionHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
     actionHistory:add(nn.Reshape(STATES_PER_EXAMPLE * #actions.ACTIONS_NETWORK))
@@ -1110,6 +65,8 @@ function network.createQ10()
     actionHistory:add(nn.LeakyReLU(0.2, true))
     local actionHistorySize = 32
 
+    -- State history branch. Deals with previously seen states (as small images).
+    -- Note that this branch also retrieves the current state as a small image.
     local imageHistory = nn.Sequential()
     if GPU then imageHistory:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
     imageHistory:add(conv(STATES_PER_EXAMPLE, 64, 3, 1))
@@ -1118,19 +75,24 @@ function network.createQ10()
     local imageHistorySize = 64 * hH/2/4 * wH/2/4
     imageHistory:add(nn.Reshape(imageHistorySize))
 
+    -- Last image branch. Sees only the current state as a larger image.
     local lastImage = nn.Sequential()
     if GPU then lastImage:add(nn.Copy('torch.FloatTensor', 'torch.CudaTensor', true, true)) end
     lastImage:add(conv(cL, 256, 5, 1))
     lastImage:add(nn.SpatialMaxPooling(2, 2))
     lastImage:add(conv(256, 64, 3, 1))
+
     local liParallel = nn.Concat(2)
+
+    -- Subbranch with Spatial Transformer.
     local localizedNet = nn.Sequential()
-    localizedNet:add(network.createSpatialTransformer3(false, true, true, hL/2, 64, GPU))
+    localizedNet:add(network.createSpatialTransformer(false, true, true, hL/2, 64, GPU))
     localizedNet:add(conv(64, 64, 3, 2))
     localizedNet:add(conv(64, 32, 3, 1))
     local localizedNetSize = 32*hL/2/2*wL/2/2
     localizedNet:add(nn.Reshape(localizedNetSize))
 
+    -- Subbranch without Spatial Transformer.
     local unlocalizedNet = nn.Sequential()
     unlocalizedNet:add(conv(64, 64, 3, 2))
     unlocalizedNet:add(conv(64, 128, 3, 2))
@@ -1143,43 +105,44 @@ function network.createQ10()
     local lastImageSize = localizedNetSize + unlocalizedNetSize
     lastImage:add(nn.Reshape(lastImageSize))
 
+    -- Merge all three branches.
     local parallel = nn.ParallelTable():add(actionHistory):add(imageHistory):add(lastImage)
     net:add(parallel)
     net:add(nn.JoinTable(1, 1))
-    net:add(nn.Dropout(0.25))
+    net:add(nn.Dropout(0.25)) -- maybe not needed
 
+    -- Apply a linear hidden layer to the merged branche's results.
     net:add(nn.Linear(actionHistorySize + imageHistorySize + lastImageSize, 512))
-    --net:add(nn.L1Penalty(1e-8))
     net:add(nn.BatchNormalization(512))
-    --net:add(nn.LeakyReLU(0.2, true))
-    net:add(nn.Tanh())
-    net:add(nn.L2Penalty(1e-8))
-    --net:add(nn.L2Penalty(1e-10, false))
-    net:add(nn.Dropout(0.5))
+    net:add(nn.Tanh()) -- maybe replaceable by LReLU
+    net:add(nn.L2Penalty(1e-8)) -- maybe not needed
+    net:add(nn.Dropout(0.5)) -- maybe not needed
 
+    -- Predict rewards by action.
     net:add(nn.Linear(512, #actions.ACTIONS_NETWORK))
-    --net:add(nn.Tanh())
-    --net:add(nn.MulConstant(50))
-    net:add(nn.L1Penalty(1e-8, false))
+    net:add(nn.L1Penalty(1e-8, false)) -- maybe not needed
 
     if GPU then
         net:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
         net:cuda()
     end
 
+    -- Function to initialize the weights and biases.
     local function weights_init(m)
+        -- dontInitialize flag is set for one linear layer of the Spatial Transformer
+        -- (though nowadays probably not necessary anymore)
         if m.dontInitialize == nil then
             local name = torch.type(m)
 
             if name:find('Convolution') then
                 m.weight:normal(0.0, 0.05)
-                --m.bias:fill(0)
+                -- check if layer is unbiased (:noBias())
                 if m.bias ~= nil then
                     m.bias:normal(0.0, 0.05)
                 end
             elseif name:find('Linear') then
                 m.weight:normal(0.0, 0.05)
-                --m.bias:fill(0)
+                -- check if layer is unbiased (:noBias())
                 if m.bias ~= nil then
                     m.bias:normal(0.0, 0.05)
                 end
@@ -1194,26 +157,13 @@ function network.createQ10()
     return net
 end
 
-function network.createOrLoadQ()
-    local loaded = network.load()
-    if loaded == nil then
-        return network.createQ10()
-    else
-        return loaded
-    end
-end
-
+-- Perform a forward/backward training pass for a given batch.
 function network.forwardBackwardBatch(batchInput, batchTarget)
     local loss
-    --print("fwbw start")
     Q:training()
-    --network.displayBatch(batchInput, 1, "Training images for Q")
     local feval = function(x)
-        --print("batchInput", batchInput:size(1), batchInput:size(2), batchInput:size(3), batchInput:size(4))
-        --print("batchOutput", batchTarget:size(1), batchTarget:size(2))
-
-        local input = batchInput --:clone()
-        local target = batchTarget --:clone()
+        local input = batchInput
+        local target = batchTarget
 
         GRAD_PARAMETERS:zero() -- reset gradients
         -- forward pass
@@ -1234,15 +184,12 @@ function network.forwardBackwardBatch(batchInput, batchTarget)
     --optim.sgd(feval, PARAMETERS, {learningRate=0.00001}, OPTSTATE)
     --optim.sgd(feval, PARAMETERS, OPTCONFIG, OPTSTATE)
     --optim.rmsprop(feval, PARAMETERS, {}, OPTSTATE)
-    --print("in fw/bw")
-    --feval()
-    --print("fwbw end")
     Q:evaluate()
     return loss
 end
 
+-- Compute the loss of a given batch without training on it.
 function network.batchToLoss(batchInput, batchTarget)
-    --Q:training()
     Q:evaluate()
     local batchOutput = Q:forward(batchInput)
     local err = CRITERION:forward(batchOutput, batchTarget)
@@ -1250,6 +197,7 @@ function network.batchToLoss(batchInput, batchTarget)
     return err
 end
 
+-- Approximate the Q-value of a specific action for a given state chain.
 function network.approximateActionValue(stateChain, action)
     assert(action ~= nil)
     local values = network.approximateActionValues(stateChain)
@@ -1257,6 +205,8 @@ function network.approximateActionValue(stateChain, action)
     return (values[action.arrow] + values[action.button])/2
 end
 
+-- Approximate the Q-values of all actions for a list of state chains.
+-- TODO fully replace this function with approximateActionValuesBatch().
 function network.approximateActionValues(stateChain)
     assert(#stateChain == STATES_PER_EXAMPLE)
 
@@ -1266,6 +216,7 @@ function network.approximateActionValues(stateChain)
     return out
 end
 
+-- Approximate Q-values (for all actions) for many chains of states.
 function network.approximateActionValuesBatch(stateChains, net)
     net = net or Q
     net:evaluate()
@@ -1285,15 +236,10 @@ function network.approximateActionValuesBatch(stateChains, net)
     return out
 end
 
+-- Predict the best action (maximal reward) for a chain of states.
+-- @returns tuple (Action, action value)
 function network.approximateBestAction(stateChain)
     local values = network.approximateActionValues(stateChain)
-    --[[
-    print("[network.approximateBestAction] #values:", #values)
-    for key,value in pairs(values) do
-        print(key, value)
-    end
-    print("----")
-    --]]
 
     local bestArrowIdx = nil
     local bestArrowValue = nil
@@ -1332,14 +278,11 @@ function network.approximateBestAction(stateChain)
     end
     display.plot(plotPointsButtons, {win=40, labels={'Action', 'Q(s,a)'}, title='Q(s,a) using emulator action IDs (Buttons)'})
 
-    --local maxs, indices = torch.max(result[1])
-    --print("maxs:", maxs)
-    --print("indices:", indices)
-    --print(string.format("Best Action: idx %d with %.4f", bestActionIdx, bestActionValue))
-    --return {bestActionArrow, bestActionButton}, {bestArrowValue, bestButtonValue}
     return Action.new(bestArrowIdx, bestButtonIdx), (bestArrowValue+bestButtonValue)/2
 end
 
+-- Predicts the best actions (maximal reward) for many chains of states.
+-- @returns List of (Action, action value)
 function network.approximateBestActionsBatch(stateChains, net)
     net = net or Q
     local result = {}
@@ -1375,12 +318,16 @@ function network.approximateBestActionsBatch(stateChains, net)
     return result
 end
 
+-- Converts many chains of states to a batch for training/validation.
+-- @returns tuple (input/X, target/Y)
 function network.stateChainsToBatch(stateChains)
     local batchInput = network.stateChainsToBatchInput(stateChains)
     local batchTarget = network.stateChainsToBatchTarget(stateChains)
     return batchInput, batchTarget
 end
 
+-- Converts many chains of states to the input/x of a batch.
+-- @returns Table {action history tensor, state history tensor, last state tensor}
 function network.stateChainsToBatchInput(stateChains)
     local batchSize = #stateChains
     local batchInput = {
@@ -1399,6 +346,8 @@ function network.stateChainsToBatchInput(stateChains)
     return batchInput
 end
 
+-- Converts many chains of states to their batch targets (Y).
+-- @returns Tensor
 function network.stateChainsToBatchTarget(stateChains)
     local batchSize = #stateChains
     local batchTarget = torch.zeros(batchSize, #actions.ACTIONS_NETWORK)
@@ -1410,6 +359,8 @@ function network.stateChainsToBatchTarget(stateChains)
     return batchTarget
 end
 
+-- Converts a single state chain to a batch input.
+-- @returns {action history tensor, image history tensor, last image tensor}
 function network.stateChainToInput(stateChain)
     assert(#stateChain == STATES_PER_EXAMPLE)
     local actionChain = torch.zeros(#stateChain, #actions.ACTIONS_NETWORK)
@@ -1433,6 +384,8 @@ function network.stateChainToInput(stateChain)
     return example
 end
 
+-- Converts a single state chain to a batch target.
+-- @returns Tensor
 function network.stateChainToTarget(stateChain)
     local lastState = stateChain[#stateChain]
     local action = lastState.action
@@ -1441,6 +394,9 @@ function network.stateChainToTarget(stateChain)
     return vec
 end
 
+-- Converts an Action object to a two-hot-vector that can be used as target for a batch.
+-- (Two, because there are two choices: Arrow and other button.)
+-- @returns Tensor
 function network.actionToNetworkVector(action)
     local vec = torch.zeros(#actions.ACTIONS_NETWORK)
     vec[network.getNetworkPositionOfActionIdx(action.arrow)] = 1
@@ -1448,6 +404,8 @@ function network.actionToNetworkVector(action)
     return vec
 end
 
+-- Converts a network output to a table [action index => reward].
+-- @returns Table
 function network.networkVectorToActionValues(vec)
     local out = {}
     for i=1,vec:size(1) do
@@ -1456,6 +414,8 @@ function network.networkVectorToActionValues(vec)
     return out
 end
 
+-- Returns the position (1..N) of an action (specified by its index) among the output neurons of the network.
+-- @returns integer
 function network.getNetworkPositionOfActionIdx(actionIdx)
     assert(actionIdx ~= nil)
     for i=1,#actions.ACTIONS_NETWORK do
@@ -1466,12 +426,14 @@ function network.getNetworkPositionOfActionIdx(actionIdx)
     error("action not found: " .. actionIdx)
 end
 
+-- Clamps/truncates gradient values.
 function network.clamp(gradParameters, clampValue)
     if clampValue ~= 0 then
         gradParameters:clamp((-1)*clampValue, clampValue)
     end
 end
 
+-- Applies a L1 norm to the parameters of the network.
 function network.l1(parameters, gradParameters, lossValue, l1weight)
     if l1weight ~= 0 then
         lossValue = lossValue + l1weight * torch.norm(parameters, 1)
@@ -1482,6 +444,7 @@ function network.l1(parameters, gradParameters, lossValue, l1weight)
     return lossValue
 end
 
+-- Applies a L2 norm to the parameters of the network.
 function network.l2(parameters, gradParameters, lossValue, l2weight)
     if l2weight ~= 0 then
         lossValue = lossValue + l2weight * torch.norm(parameters, 2)^2/2
@@ -1492,6 +455,7 @@ function network.l2(parameters, gradParameters, lossValue, l2weight)
     return lossValue
 end
 
+-- Returns the number of parameters/weights in a network.
 function network.getNumberOfParameters(net)
     local nparams = 0
     local dModules = net:listModules()
@@ -1503,6 +467,8 @@ function network.getNumberOfParameters(net)
     return nparams
 end
 
+-- Displays a batch of images.
+-- TODO does this still work? is this still used?
 function network.displayBatch(images, windowId, title, width)
     --print("network.displayBatch start")
     local nExamples, nStates, h, w = images:size(1), images:size(2), images:size(3), images:size(4)
@@ -1527,6 +493,8 @@ function network.displayBatch(images, windowId, title, width)
 end
 
 
+-- Prepares a network for saving to file by shrinking/removing unnecessary data.
+-- Works in-place, i.e. does not return anything.
 -- from https://github.com/torch/DEPRECEATED-torch7-distro/issues/47
 -- Resize the output, gradInput, etc temporary tensors to zero (so that the on disk size is smaller)
 function network.prepareNetworkForSave(node)
@@ -1563,8 +531,8 @@ function network.prepareNetworkForSave(node)
     collectgarbage()
 end
 
-
 -- Create a new spatial transformer network.
+-- NOTE: This is adapted to this specific project. Rotation is likely not working anymore.
 -- From: https://github.com/Moodstocks/gtsrb.torch/blob/master/networks.lua
 -- @param allow_rotation Whether to allow the spatial transformer to rotate the image.
 -- @param allow_scaling Whether to allow the spatial transformer to scale (zoom) the image.
@@ -1573,277 +541,6 @@ end
 -- @param input_channels Number of channels of the image.
 -- @param cuda Whether to activate cuda mode.
 function network.createSpatialTransformer(allow_rotation, allow_scaling, allow_translation, input_size, input_channels, cuda)
-    if cuda == nil then
-        cuda = true
-    end
-
-    -- Get number of params and initial state
-    local init_bias = {}
-    local nbr_params = 0
-    if allow_rotation then
-        nbr_params = nbr_params + 1
-        init_bias[nbr_params] = 0
-    end
-    if allow_scaling then
-        nbr_params = nbr_params + 1
-        init_bias[nbr_params] = 1
-    end
-    if allow_translation then
-        nbr_params = nbr_params + 2
-        init_bias[nbr_params-1] = 0
-        init_bias[nbr_params] = 0
-    end
-    if nbr_params == 0 then
-        -- fully parametrized case
-        nbr_params = 6
-        init_bias = {1,0,0,
-                     0,1,0}
-    end
-
-    -- Create localization network
-    local net = nn.Sequential()
-    --net:add(nn.PrintSize("localizer"))
-    net:add(nn.SpatialConvolution(input_channels, 32, 5, 5, 2, 2, (5-1)/2))
-    net:add(nn.SpatialBatchNormalization(32))
-    --net:add(nn.L1Penalty(1e-8))
-    net:add(nn.ELU(1.0, true))
-    --net:add(nn.SpatialMaxPooling(2, 2))
-
-    net:add(nn.SpatialConvolution(32, 32, 5, 5, 2, 2, (5-1)/2))
-    net:add(nn.SpatialBatchNormalization(32))
-    --net:add(nn.L1Penalty(1e-6))
-    net:add(nn.ELU(1.0, true))
-    --net:add(nn.SpatialMaxPooling(2, 2))
-
-    --[[
-    local classifier = nn.SpatialConvolution(16, nbr_params, 8, 8, 8, 8, (8-1)/2)
-    net:add(classifier)
-    net:add(nn.Reshape(nbr_params))
-    --]]
-
-    local newHeight = input_size/2/2
-    net:add(nn.SpatialDropout(0.1))
-    net:add(nn.Reshape(32 * newHeight * newHeight)) -- must be reshape, nn.View converts (1, 16*H*W) to (16*H*W)
-
-    net:add(nn.Linear(32 * newHeight * newHeight, 128))
-    net:add(nn.L2Penalty(1e-5))
-    net:add(nn.Tanh())
-    net:add(nn.Dropout(0.25))
-
-    net:add(nn.Linear(128, 128))
-    net:add(nn.L2Penalty(1e-2))
-    net:add(nn.Tanh())
-    net:add(nn.Dropout(0.25))
-
-    local classifier = nn.Linear(128, nbr_params)
-    net:add(classifier)
-    --net:add(nn.L1Penalty(1e-6))
-
-    --net = require('weight-init')(net, 'heuristic')
-    -- Initialize the localization network (see paper, A.3 section)
-    classifier.weight:zero()
-    --classifier.weight:normal(0, 0.001)
-    classifier.bias = torch.Tensor(init_bias)
-    classifier.dontInitialize = true
-
-    local localization_network = net
-
-    -- Create the actual module structure
-    -- branch1 is basically an identity matrix
-    -- branch2 estimates the necessary rotation/scaling/translation (above localization network)
-    -- They both feed into the BilinearSampler, which transforms the image
-    local ct = nn.ConcatTable()
-    local branch1 = nn.Sequential()
-    --branch1:add(nn.Identity())
-    --branch1:add(nn.PrintSize())
-    branch1:add(nn.Transpose({3,4},{2,4}))
-    --branch1:add(nn.PrintSize())
-    -- see (1) below
-    if cuda then
-        branch1:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-    end
-    local branch2 = nn.Sequential()
-    branch2:add(localization_network)
-    --branch2:add(nn.PrintSize("after localizer"))
-    branch2:add(nn.AffineTransformMatrixGenerator(allow_rotation, allow_scaling, allow_translation))
-    --branch2:add(nn.PrintSize("after affine matrix gen"))
-    branch2:add(nn.AffineGridGeneratorBHWD(input_size, input_size))
-    --branch2:add(nn.PrintSize("after affine grid gen"))
-    -- see (1) below
-    if cuda then
-        branch2:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-    end
-    ct:add(branch1)
-    ct:add(branch2)
-
-    local st = nn.Sequential()
-    st:add(ct)
-    local sampler = nn.BilinearSamplerBHWD()
-    -- (1)
-    -- The sampler lead to non-reproducible results on GPU
-    -- We want to always keep it on CPU
-    -- This does no lead to slowdown of the training
-    if cuda then
-        sampler:type('torch.FloatTensor')
-        -- make sure it will not go back to the GPU when we call
-        -- ":cuda()" on the network later
-        sampler.type = function(type) return self end
-        --st:add(nn.PrintSize())
-        st:add(sampler)
-        st:add(nn.Copy('torch.FloatTensor','torch.CudaTensor', true, true))
-    else
-        st:add(sampler)
-    end
-    st:add(nn.Transpose({2,4},{3,4}))
-
-    return st
-end
-
--- Create a new spatial transformer network.
--- From: https://github.com/Moodstocks/gtsrb.torch/blob/master/networks.lua
--- @param allow_rotation Whether to allow the spatial transformer to rotate the image.
--- @param allow_scaling Whether to allow the spatial transformer to scale (zoom) the image.
--- @param allow_translation Whether to allow the spatial transformer to translate (shift) the image.
--- @param input_size Height/width of input images.
--- @param input_channels Number of channels of the image.
--- @param cuda Whether to activate cuda mode.
-function network.createSpatialTransformer2(allow_rotation, allow_scaling, allow_translation, input_size, input_channels, cuda)
-    if cuda == nil then
-        cuda = true
-    end
-
-    -- Get number of params and initial state
-    local init_bias = {}
-    local nbr_params = 0
-    if allow_rotation then
-        nbr_params = nbr_params + 1
-        init_bias[nbr_params] = 0
-    end
-    if allow_scaling then
-        nbr_params = nbr_params + 1
-        init_bias[nbr_params] = 0.66
-    end
-    if allow_translation then
-        nbr_params = nbr_params + 2
-        init_bias[nbr_params-1] = 0
-        init_bias[nbr_params] = 0
-    end
-    if nbr_params == 0 then
-        -- fully parametrized case
-        nbr_params = 6
-        init_bias = {1,0,0,
-                     0,1,0}
-    end
-
-    -- Create localization network
-    local net = nn.Sequential()
-    --net:add(nn.PrintSize("localizer"))
-    net:add(nn.SpatialConvolution(input_channels, 32, 5, 5, 2, 2, (5-1)/2))
-    net:add(nn.SpatialBatchNormalization(32))
-    net:add(nn.LeakyReLU(0.2, true))
-
-    net:add(nn.SpatialConvolution(32, 32, 5, 5, 2, 2, (5-1)/2))
-    net:add(nn.SpatialBatchNormalization(32))
-    net:add(nn.LeakyReLU(0.2, true))
-
-    --[[
-    local classifier = nn.SpatialConvolution(16, nbr_params, 8, 8, 8, 8, (8-1)/2)
-    net:add(classifier)
-    net:add(nn.Reshape(nbr_params))
-    --]]
-
-    local newHeight = input_size/2/2
-    net:add(nn.SpatialDropout(0.1))
-    net:add(nn.Reshape(32 * newHeight * newHeight)) -- must be reshape, nn.View converts (1, 16*H*W) to (16*H*W)
-
-    net:add(nn.Linear(32 * newHeight * newHeight, 128))
-    net:add(nn.L2Penalty(1e-6, false))
-    net:add(nn.LeakyReLU(0.2, true))
-    net:add(nn.Dropout(0.25))
-
-    net:add(nn.Linear(128, 128))
-    net:add(nn.L2Penalty(1e-6, false))
-    net:add(nn.LeakyReLU(0.2, true))
-
-    local classifier = nn.Linear(128, nbr_params)
-    net:add(classifier)
-    net:add(nn.L2Penalty(1e-2, false))
-    --local constant_tnsr = torch.Tensor(nbr_params)
-    --constant_tnsr[{1,nbr_params}] = init_bias
-    local constant_tnsr = torch.Tensor(init_bias)
-    net:add(nn.AddConstantTensor(constant_tnsr))
-    --net:add(nn.L1Penalty(1e-6))
-
-    --net = require('weight-init')(net, 'heuristic')
-    -- Initialize the localization network (see paper, A.3 section)
-    classifier.weight:zero()
-    --classifier.weight:normal(0, 0.001)
-    --classifier.bias = torch.zeros(nbr_params)
-    classifier:noBias()
-    classifier.dontInitialize = true
-
-    local localization_network = net
-
-    -- Create the actual module structure
-    -- branch1 is basically an identity matrix
-    -- branch2 estimates the necessary rotation/scaling/translation (above localization network)
-    -- They both feed into the BilinearSampler, which transforms the image
-    local ct = nn.ConcatTable()
-    local branch1 = nn.Sequential()
-    --branch1:add(nn.Identity())
-    --branch1:add(nn.PrintSize())
-    branch1:add(nn.Transpose({3,4},{2,4}))
-    --branch1:add(nn.PrintSize())
-    -- see (1) below
-    if cuda then
-        branch1:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-    end
-    local branch2 = nn.Sequential()
-    branch2:add(localization_network)
-    --branch2:add(nn.PrintSize("after localizer"))
-    branch2:add(nn.AffineTransformMatrixGenerator(allow_rotation, allow_scaling, allow_translation))
-    --branch2:add(nn.PrintSize("after affine matrix gen"))
-    branch2:add(nn.AffineGridGeneratorBHWD(input_size, input_size))
-    --branch2:add(nn.PrintSize("after affine grid gen"))
-    -- see (1) below
-    if cuda then
-        branch2:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
-    end
-    ct:add(branch1)
-    ct:add(branch2)
-
-    local st = nn.Sequential()
-    st:add(ct)
-    local sampler = nn.BilinearSamplerBHWD()
-    -- (1)
-    -- The sampler lead to non-reproducible results on GPU
-    -- We want to always keep it on CPU
-    -- This does no lead to slowdown of the training
-    if cuda then
-        sampler:type('torch.FloatTensor')
-        -- make sure it will not go back to the GPU when we call
-        -- ":cuda()" on the network later
-        sampler.type = function(type) return self end
-        --st:add(nn.PrintSize())
-        st:add(sampler)
-        st:add(nn.Copy('torch.FloatTensor','torch.CudaTensor', true, true))
-    else
-        st:add(sampler)
-    end
-    st:add(nn.Transpose({2,4},{3,4}))
-
-    return st
-end
-
--- Create a new spatial transformer network.
--- From: https://github.com/Moodstocks/gtsrb.torch/blob/master/networks.lua
--- @param allow_rotation Whether to allow the spatial transformer to rotate the image.
--- @param allow_scaling Whether to allow the spatial transformer to scale (zoom) the image.
--- @param allow_translation Whether to allow the spatial transformer to translate (shift) the image.
--- @param input_size Height/width of input images.
--- @param input_channels Number of channels of the image.
--- @param cuda Whether to activate cuda mode.
-function network.createSpatialTransformer3(allow_rotation, allow_scaling, allow_translation, input_size, input_channels, cuda)
     if cuda == nil then
         cuda = true
     end
@@ -1878,25 +575,16 @@ function network.createSpatialTransformer3(allow_rotation, allow_scaling, allow_
     net:add(nn.SpatialBatchNormalization(32))
     net:add(nn.LeakyReLU(0.2, true))
     net:add(nn.SpatialDropout(0.1))
-    --net:add(nn.L1Penalty(1e-8, false))
 
     net:add(nn.SpatialConvolution(32, 64, 3, 3, 2, 2, (3-1)/2)) --> 8x8
     net:add(nn.SpatialBatchNormalization(64))
     net:add(nn.LeakyReLU(0.2, true))
     net:add(nn.SpatialDropout(0.1))
-    --net:add(nn.L1Penalty(1e-8, false))
 
     net:add(nn.SpatialConvolution(64, 64, 3, 3, 2, 2, (3-1)/2)) --> 4x4
     net:add(nn.SpatialBatchNormalization(64))
     net:add(nn.LeakyReLU(0.2, true))
     net:add(nn.Dropout(0.5))
-    --net:add(nn.L1Penalty(1e-8, false))
-
-    --[[
-    local classifier = nn.SpatialConvolution(16, nbr_params, 8, 8, 8, 8, (8-1)/2)
-    net:add(classifier)
-    net:add(nn.Reshape(nbr_params))
-    --]]
 
     local newHeight = input_size/2/2/2
     net:add(nn.Reshape(64 * newHeight * newHeight)) -- must be reshape, nn.View converts (1, 16*H*W) to (16*H*W)
@@ -1905,24 +593,20 @@ function network.createSpatialTransformer3(allow_rotation, allow_scaling, allow_
     net:add(nn.BatchNormalization(256))
     net:add(nn.LeakyReLU(0.2, true))
     net:add(nn.Dropout(0.5))
-    --net:add(nn.L2Penalty(1e-8, false))
 
     local classifier = nn.Linear(256, nbr_params)
     net:add(classifier)
     net:add(nn.Tanh())
-    net:add(nn.L2Penalty(1e-3, false))
-    --local constant_tnsr = torch.Tensor(nbr_params)
-    --constant_tnsr[{1,nbr_params}] = init_bias
+    net:add(nn.L2Penalty(1e-3, false)) -- let the ST only change the area of focus if it really pays off
+
+    -- We keep the classifier's output close to zero most of the time,
+    -- and then add init_bias to its output. init_bias is configured so that
+    -- the area of focus is in the center of the image and has ~50% of the size
+    -- of the image.
     local constant_tnsr = torch.Tensor(init_bias)
     net:add(nn.AddConstantTensor(constant_tnsr))
-    --net:add(nn.L1Penalty(1e-6))
-
-    --net = require('weight-init')(net, 'heuristic')
-    -- Initialize the localization network (see paper, A.3 section)
-    classifier.weight:zero()
-    --classifier.weight:normal(0, 0.001)
-    --classifier.bias = torch.zeros(nbr_params)
     classifier:noBias()
+    classifier.weight:zero()
     classifier.dontInitialize = true
 
     local localization_network = net
@@ -1933,21 +617,15 @@ function network.createSpatialTransformer3(allow_rotation, allow_scaling, allow_
     -- They both feed into the BilinearSampler, which transforms the image
     local ct = nn.ConcatTable()
     local branch1 = nn.Sequential()
-    --branch1:add(nn.Identity())
-    --branch1:add(nn.PrintSize())
     branch1:add(nn.Transpose({3,4},{2,4}))
-    --branch1:add(nn.PrintSize())
     -- see (1) below
     if cuda then
         branch1:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))
     end
     local branch2 = nn.Sequential()
     branch2:add(localization_network)
-    --branch2:add(nn.PrintSize("after localizer"))
     branch2:add(nn.AffineTransformMatrixGenerator(allow_rotation, allow_scaling, allow_translation))
-    --branch2:add(nn.PrintSize("after affine matrix gen"))
     branch2:add(nn.AffineGridGeneratorBHWD(input_size, input_size))
-    --branch2:add(nn.PrintSize("after affine grid gen"))
     -- see (1) below
     if cuda then
         branch2:add(nn.Copy('torch.CudaTensor', 'torch.FloatTensor', true, true))

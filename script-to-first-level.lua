@@ -1,3 +1,5 @@
+-- This script can be used to get to the first level on the left without having
+-- to control Mario yourself.
 memory = require 'memory'
 network = require 'network'
 actions = require 'actions'

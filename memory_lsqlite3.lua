@@ -1,3 +1,8 @@
+-- Replay memory functions.
+-- The replay memory saves observed states to an SQLite database
+-- and can retrieve them later as chains (state1, state2, ...) for training
+-- and validation.
+
 require 'torch'
 require 'paths'
 local driver = require 'lsqlite3'
@@ -30,12 +35,17 @@ assert(db:exec[[
 ]])
 
 local memory = {}
+
+-- Min and max sizes of the replay memory. Note that these are not exactly kept
+-- and only sometimes checked.
 memory.MEMORY_MAX_SIZE_TRAINING = 250000
 memory.MEMORY_MAX_SIZE_VALIDATION = 25000
+
 memory.MEMORY_TRAINING_MIN_SIZE = 100
 
 memory.cache = {}
 
+-- Resets cached values.
 function memory.resetCache()
     memory.cache = {
         count_train = nil,
@@ -47,11 +57,24 @@ end
 memory.resetCache()
 
 function memory.load()
+    -- dummy function to match memory.lua's API.
+    -- The SQLite replay memory is saved continuously.
 end
 
 function memory.save()
+    -- dummy function to match memory.lua's API.
+    -- The SQLite replay memory is saved continuously.
 end
 
+-- Count the number of all states in the replay memory (training and validation).
+function memory.getCountAllEntries()
+    for row in db:nrows(string.format("SELECT COUNT(*) AS c FROM states")) do
+        return row.c
+    end
+end
+
+-- Count the number of states in the replay memory.
+-- @param validation True=only for validation states, False=only for training states.
 function memory.getCountEntries(validation)
     assert(validation == true or validation == false)
     local val_int = 0
@@ -61,6 +84,8 @@ function memory.getCountEntries(validation)
     end
 end
 
+-- Count the number of states in the replay memory, if possible return a cached value.
+-- @param validation True=only for validation states, False=only for training states.
 function memory.getCountEntriesCached(validation)
     assert(validation == true or validation == false)
     if validation then
@@ -76,12 +101,8 @@ function memory.getCountEntriesCached(validation)
     end
 end
 
-function memory.getCountAllEntries()
-    for row in db:nrows(string.format("SELECT COUNT(*) AS c FROM states")) do
-        return row.c
-    end
-end
-
+-- Get the maximum ID of the states in the replay memory.
+-- @param defaultVal The default value to return if the memory is empty.
 function memory.getMaxStateId(defaultVal)
     if memory.getCountAllEntries() == 0 then
         return defaultVal
@@ -92,40 +113,41 @@ function memory.getMaxStateId(defaultVal)
     end
 end
 
+-- Returns whether the replay memory at least as many training entries as maximally allowed.
 function memory.isTrainDataFull()
     return memory.getCountEntriesCached(false) >= memory.MEMORY_MAX_SIZE_TRAINING
 end
 
 function memory.reevaluateRewards()
+    -- dummy function to match memory.lua's API.
 end
 
 function memory.reorderByDirectReward()
+    -- dummy function to match memory.lua's API.
 end
 
 function memory.reorderBySurprise()
+    -- dummy function to match memory.lua's API.
 end
 
 function memory.reorderBy(func)
+    -- dummy function to match memory.lua's API.
 end
 
 function memory.addEntry(stateChain, nextState, validation)
-    --[[
-    assert(validation == true or validation == false)
-    for i=1,#stateChain do
-        memory.insertState(stateChain[i], validation, false)
-    end
-    memory.insertState(nextState, validation, false)
-
-    if torch.rand() < 1/1000 do
-        memory.reduceToMaxSizes()
-    end
-    --]]
+    -- dummy function to match memory.lua's API.
 end
 
+-- Adds a single state to the replay memory.
+-- @param state A State object.
+-- @param validation True=validation state, False=training state.
 function memory.addState(state, validation)
     memory.addStates({state}, validation)
 end
 
+-- Adds multiple states to the replay memory.
+-- @param states List of State objects.
+-- @param validation True=validation states, False=training states.
 function memory.addStates(states, validation)
     assert(validation == true or validation == false)
     memory.insertStatesBatched(states, validation, false)
@@ -135,10 +157,20 @@ function memory.addStates(states, validation)
     end
 end
 
+-- Inserts a single state into the database.
+-- This is slow for many states.
+-- @param state A State object.
+-- @param validation True=validation state, False=training state.
+-- @param updateIfExists True=Updates the state's row if it already exists, False=Does nothing if the state already exists.
 function memory.insertState(state, validation, updateIfExists)
     memory.insertStates({state}, validation, updateIfExists)
 end
 
+-- Inserts a many states into the database.
+-- @param states List of State objects.
+-- @param validation True=validation states, False=training states.
+-- @param updateIfExists True=Updates a state's row if it already exists, False=Does nothing if a state already exists.
+--[[
 function memory.insertStates(states, validation, updateIfExists)
     memory.resetCache()
 
@@ -147,9 +179,8 @@ function memory.insertStates(states, validation, updateIfExists)
     local val_int = 0
     if validation then val_int = 1 end
 
-    --print("A")
     local stmt = db:prepare(
-        string.format([[
+        string.format([=[
             INSERT OR %s INTO states (
                 screen_jpg,
                 id,
@@ -193,7 +224,7 @@ function memory.insertStates(states, validation, updateIfExists)
                 :isdummy,
                 :isvalidation
             )
-        ]], ifExistsCommand)
+        ]=], ifExistsCommand)
     )
 
     for i=1,#states do
@@ -204,17 +235,11 @@ function memory.insertStates(states, validation, updateIfExists)
         --print("X")
 
         local screen_jpg_serialized = torch.serialize(state.screen, "ascii")
-        --print("screen serialized length", #screen_jpg_serialized, torch.type(screen_jpg_serialized))
-        --print("screen length serialized:", #screen_jpg_serialized)
-        --print("screen length serialized escaped:", #con:escape(screen_jpg_serialized))
         local isLevelEnding_int = 0
         if state.isLevelEnding then isLevelEnding_int = 1 end
         local dummy_int = 0
         if state.isDummy then dummy_int = 1 end
 
-        --screenjpg = con:escape(screen_jpg_serialized)
-        --screenjpg = "0",)
-        --stmt:bind_blob(0, screen_jpg_serialized)
         stmt:bind_names{
             screenjpg = screen_jpg_serialized,
             id = state.id,
@@ -236,15 +261,19 @@ function memory.insertStates(states, validation, updateIfExists)
             isdummy = dummy_int,
             isvalidation = val_int
         }
-        --print("xDiffReward", state.reward.xDiffReward)
 
         stmt:step()
-        --stmt:finalize()
         stmt:reset()
     end
     stmt:finalize()
 end
+--]]
 
+-- Inserts a many states into the database.
+-- States are inserted in batches to avoid unnecessary commits.
+-- @param states List of State objects.
+-- @param validation True=validation states, False=training states.
+-- @param updateIfExists True=Updates a state's row if it already exists, False=Does nothing if a state already exists.
 function memory.insertStatesBatched(states, validation, updateIfExists)
     local batchSize = 32
     memory.resetCache()
@@ -254,6 +283,8 @@ function memory.insertStatesBatched(states, validation, updateIfExists)
     local val_int = 0
     if validation then val_int = 1 end
 
+    -- Split the states into batches (many rows of values)
+    -- and insert each batch
     for i=1,#states,batchSize do
         local sql = string.format([[
             INSERT OR %s INTO states (
@@ -280,18 +311,15 @@ function memory.insertStatesBatched(states, validation, updateIfExists)
             VALUES
         ]], ifExistsCommand)
 
+        -- add the batche's states to the insert statement
         local data = {}
         for j=i,math.min(i+batchSize, #states) do
             local state = states[j]
 
             assert(state.action ~= nil)
             assert(state.reward ~= nil)
-            --print("X")
 
             local screen_jpg_serialized = torch.serialize(state.screen, "ascii")
-            --print("screen serialized length", #screen_jpg_serialized, torch.type(screen_jpg_serialized))
-            --print("screen length serialized:", #screen_jpg_serialized)
-            --print("screen length serialized escaped:", #con:escape(screen_jpg_serialized))
             local isLevelEnding_int = 0
             if state.isLevelEnding then isLevelEnding_int = 1 end
             local dummy_int = 0
@@ -345,7 +373,7 @@ function memory.insertStatesBatched(states, validation, updateIfExists)
             data["isvalidation" .. j] = val_int
         end
 
-        --print(sql)
+        -- insert the batch
         local stmt = db:prepare(sql)
         stmt:bind_names(data)
         stmt:step()
@@ -353,12 +381,14 @@ function memory.insertStatesBatched(states, validation, updateIfExists)
     end
 end
 
+-- Counts how often there is a state with ID i, but no state with ID i-1 in the database.
 function memory.getCountHoles()
     for row in db:nrows(string.format("SELECT COUNT(s1.id) AS c FROM states as s1 LEFT JOIN states as s2 ON s2.id=s1.id-1 WHERE s2.id IS NULL ORDER BY s1.id ASC;")) do
         return row.c
     end
 end
 
+-- Reduces training and validation states in the replay memory down to the allowed maximum numbers.
 function memory.reduceToMaxSizes()
     memory.resetCache()
 
@@ -370,16 +400,6 @@ function memory.reduceToMaxSizes()
         local toDelete = count - maxCount
         --print(string.format("count=%d, max count=%d, toDelete=%d, val_int=%d", count, maxCount, toDelete, val_int))
         if toDelete > 0 then
-            --[[
-            local indices = {}
-            for row in db:nrows(string.format("SELECT id FROM states WHERE is_validation = %d ORDER BY id ASC LIMIT %d", val_int, toDelete)) do
-                table.insert(indices, row.id)
-            end
-
-            for i=1,#indices do
-                db:exec(string.format("DELETE FROM states WHERE id = %d", indices[i]))
-            end
-            --]]
             db:exec(string.format("DELETE FROM states WHERE id IN (SELECT id FROM states WHERE is_validation=%d ORDER BY id ASC LIMIT %d)", val_int, toDelete))
         end
     end
@@ -390,15 +410,19 @@ function memory.reduceToMaxSizes()
 end
 
 function memory.removeRandomEntry(validation)
+    -- dummy function to match memory.lua's API.
 end
 
 function memory.removeRandomEntries(nRemove, validation, skew)
+    -- dummy function to match memory.lua's API.
 end
 
 function memory.getRandomWeightedIndex(skew, validation, skewStrength)
-
+    -- dummy function to match memory.lua's API.
 end
 
+-- Loads (and caches) the IDs of all states that are currently in the database.
+-- Those IDs will be used during batch creation, which significantly speeds things up.
 function memory.prepareStateIdsCache()
     local idsTrain = {}
     local idsVal = {}
@@ -415,6 +439,8 @@ function memory.prepareStateIdsCache()
     memory.cache.state_ids_train = idsTrain
 end
 
+-- Returns the cached IDs of all states in the database, if not cached already it loads them.
+-- @param validation True=validation state ids, False=training state ids.
 function memory.getStateIdsCache(validation)
     assert(validation == true or validation == false)
     if validation then
@@ -430,12 +456,17 @@ function memory.getStateIdsCache(validation)
     end
 end
 
+-- Returns n random lists of consecutive states.
+-- Consecutive means, that the IDs follow exactly the pattern (i, i+1, i+2, ...).
+-- @param n Number of lists to return.
+-- @param length Number of consecutive states in each lists.
+-- @param validation True=validation states, False=training states.
 function memory.getRandomStateChains(n, length, validation)
     assert(validation == true or validation == false)
-    --assert(memory.getCountEntries(validation) >= length)
     local val_int = 0
     if validation then val_int = 1 end
 
+    -- Loading the IDs randomly via the database, this was too slow.
     --[[
     local timeStart = os.clock()
     local lastStatesIndices = {}
@@ -447,21 +478,29 @@ function memory.getRandomStateChains(n, length, validation)
     print(string.format("getRandomStateChains load ids: %.8f", os.clock()-timeStart))
     --]]
 
+    -- Loading the IDs from the cache. Way faster.
+    -- Note that here, only the last ID of each list is collected.
     --local timeStart = os.clock()
     local ids = memory.getStateIdsCache(validation)
     local lastStatesIndices = {}
     local nbIds = #ids
     for i=1,n do
-        --print(string.format("i=%d val=%d length=%d nbIds=%d", i, val_int, length, nbIds))
         table.insert(lastStatesIndices, ids[math.random(length, nbIds)])
     end
     --print(string.format("getRandomStateChains load ids: %.8f", os.clock()-timeStart))
 
+    -- Convert IDs to states.
     local stateChains = {}
     for s=1,#lastStatesIndices do
         local id = lastStatesIndices[s]
         local indices = {}
+        -- Add the other IDs to each list until <length> IDs are reached.
         for i=1,length do table.insert(indices, id - length + i) end
+
+        -- Try to load the states of the IDs.
+        -- This can fail due to gaps in the database (e.g. next ID to i is i+2).
+        -- If it falls, call this function again recursively and load one list.
+        -- Let's hope that there is always at least one possible list without gaps...
         local stateChain = memory.getStatesByIndices(indices)
         if #stateChain ~= length then
             -- load another chain if a chain couldn't be loaded completely
@@ -474,8 +513,19 @@ function memory.getRandomStateChains(n, length, validation)
     return stateChains
 end
 
+-- Retrieves the states with provided IDs.
+-- States will be returned in ascending order by their IDs.
+-- @param indices IDs to load, must be sorted ascending.
 function memory.getStatesByIndices(indices)
-    --print("start getStatesByIndices")
+    -- Assure that IDs are sorted ascending.
+    -- This is currently done because loading order from DB is not predictable and
+    -- then still returning the states in the order provided by <indices> wouldn't be
+    -- so easy in lua. However, if the IDs are sorted ascending then it is easy.
+    for i=2,#indices do
+        assert(indices[i] > indices[i-1])
+    end
+
+    -- Prepare output array.
     local indicesStr = ""
     local indexToState = {}
     for i=1,#indices do
@@ -487,13 +537,14 @@ function memory.getStatesByIndices(indices)
         indexToState[indices[i]] = false
     end
 
+    -- Load from DB.
     for row in db:nrows(string.format("SELECT * FROM states WHERE id IN (%s)", indicesStr)) do
-        local state = memory.rowToState(row)
+        local state = memory.rowToState(row) -- convert row to State object
         assert(indexToState[state.id] ~= nil)
         indexToState[state.id] = state
     end
-    --print("Found ", found, "of ", #indices)
 
+    -- Count not found states.
     local notFound = 0
     for i=1,#indices do
         if indexToState[indices[i]] == false then
@@ -502,55 +553,59 @@ function memory.getStatesByIndices(indices)
         end
     end
 
+    -- using ipairs() here fails, so sorting by ID numbers is the easiest option
+    -- to guarantee a predictable output order.
     local states = {}
-    --[[
-    for k,v in ipairs(indexToState) do
-        print(k, v)
-        table.insert(states, v)
-    end
-    --]]
     for k,v in pairs(indexToState) do
         if v ~= false then
             table.insert(states, v)
         end
     end
     table.sort(states, function(a, b) return a.id < b.id end)
-    --print("#states", #states)
-    --print(states[1].id, states[2].id)
+
     return states
 end
 
+-- Returns a batch of training examples.
 function memory.getTrainingBatch(batchSize)
-    return memory.getBatch(batchSize, false)
+    return memory.getBatch(batchSize, false, true)
 end
 
+-- Returns a batch of validation examples.
 function memory.getValidationBatch(batchSize)
-    return memory.getBatch(batchSize, true)
+    return memory.getBatch(batchSize, true, true)
 end
 
+-- Returns a batch for training/validation.
+-- @param batchSize Number of examples.
+-- @param validation True=Use only validation states, False=only training states.
+-- @param reevaluate Re-compute the future reward of each example state chain (based on each chain's observed next state).
+-- @param Q_reevaluate The network to use for reevaluation.
 function memory.getBatch(batchSize, validation, reevaluate, Q_reevaluate)
     assert(validation == true or validation == false)
     assert(reevaluate == true or reevaluate == false)
     Q_reevaluate = Q_reevaluate or Q
 
+    -- Length of each state chain to return and to load.
+    -- If we want to reevaluate the future rewards, we will need to load the next
+    -- state after the chain's end.
     local length = STATES_PER_EXAMPLE
     local loadLength = length
     if reevaluate then loadLength = loadLength + 1 end
 
+    -- Load random state chains.
     --local timeStart = os.clock()
     local stateChains = memory.getRandomStateChains(batchSize, loadLength, validation)
     --print(string.format("getRandomStateChains: %.8f", os.clock()-timeStart))
 
-    --for i=1,batchSize do
-        --local idx = memory.getRandomWeightedIndex("top", validation)
-    --    local stateChain = memory.getRandomStateChain(loadLength, validation)
-    --    table.insert(stateChains, stateChain)
-    --end
-
     if not reevaluate then
+        -- No reevaluation, just return the state chains converted to batches.
         local batchInput, batchTarget = network.stateChainsToBatch(stateChains)
         return batchInput, batchTarget, stateChains
     else
+        -- Reevaluation requested.
+        -- State chains loaded have <length>+1. Split them into the chain to return
+        -- and the chain to use for recomputing the reward, i.e. (i,i+length) and (i+1,i+length+1).
         local stateChainsCurrent = {}
         local stateChainsNext = {}
         for i=1,#stateChains do
@@ -565,10 +620,13 @@ function memory.getBatch(batchSize, validation, reevaluate, Q_reevaluate)
             table.insert(stateChainsNext, stateChainNext)
         end
 
+        -- Compute in one batch the best actions for each chain of states.
+        -- This is faster than letting statesToReward() do that for each chain individually.
         --local timeStart = os.clock()
         local bestActions = network.approximateBestActionsBatch(stateChainsNext)
         --print(string.format("approximateBestActionsBatch: %.8f", os.clock()-timeStart))
 
+        -- Recompute the reward for each chain.
         --local timeStart = os.clock()
         for i=1,#stateChains do
             local oldReward = stateChainsCurrent[i][length].reward
@@ -578,11 +636,13 @@ function memory.getBatch(batchSize, validation, reevaluate, Q_reevaluate)
         end
         --print(string.format("statesToReward: %.8f", os.clock()-timeStart))
 
+        -- Return the updated chains as batches.
         local batchInput, batchTarget = network.stateChainsToBatch(stateChainsCurrent)
         return batchInput, batchTarget, stateChainsCurrent
     end
 end
 
+-- Convert a state row from the DB to a State object.
 function memory.rowToState(row)
     local screen_jpg
     if row.screen_jpg == nil then
@@ -590,15 +650,8 @@ function memory.rowToState(row)
         screen_jpg = torch.zeros(IMG_DIMENSIONS[1], IMG_DIMENSIONS[2], IMG_DIMENSIONS[3])
         screen_jpg = util.compressJPG(screen_jpg)
     else
-        --print("Deserializing...")
-        --print(row.screen_jpg)
         screen_jpg = torch.deserialize(row.screen_jpg, "ascii")
-        --print("Deserialized.")
     end
-
-    --local screen_jpg = nil
-    --print(screen_jpg:size(1), screen_jpg:size(2), screen_jpg:size(3))
-    --print("row", row)
 
     --[[
     print("---------------------")
@@ -631,7 +684,7 @@ function memory.rowToState(row)
 end
 
 function memory.plot(subsampling)
-
+    -- dummy function to match memory.lua's API.
 end
 
 return memory

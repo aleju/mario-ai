@@ -1,3 +1,6 @@
+-- Old VAE stuff, ended up not being used.
+-- Most of the code is adapted from https://github.com/y0ast/VAE-Torch .
+
 require 'torch'
 require 'nn'
 require 'nngraph'

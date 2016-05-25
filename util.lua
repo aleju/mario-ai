@@ -1,50 +1,54 @@
 local util = {}
 
+-- Returns whether the game is paused.
+-- TODO is this still used?
 function util.isGamePaused()
     return gui.get_runmode() == "pause"
 end
 
+-- Sets the game speed to very fast (400).
 function util.setGameSpeedToVeryFast()
     settings.set_speed(400)
 end
 
+-- Sets the game speed to fast (200).
+-- TODO is this still used?
 function util.setGameSpeedToFast()
     settings.set_speed(200)
 end
 
+-- Sets the game speed to normal (1).
+-- TODO is this still used?
 function util.setGameSpeedToNormal()
     settings.set_speed(1)
 end
 
+-- Returns a random entry from an array.
+-- TODO is this still used?
 function util.getRandomEntry(arr)
     return arr[math.random(#arr)]
 end
 
+-- Returns the current ingame score.
 function util.getCurrentScore()
     local score = lsne_memory.readsword("WRAM", 0x0f34) * 10
-    --print("Score:", score)
     return score
 end
 
---[[
-function util.getLevel()
-    local level = lsne_memory.readsword("WRAM", 0x00fe)
-    --print("Level:", level)
-    return level
-end
---]]
+-- Returns the current level?
+-- TODO is this still used?
 function util.getLevel()
     local level = lsne_memory.readsword("WRAM", 0x13bf)
-    --print("Level:", level)
     return level
 end
 
+-- Returns Mario's current x-coordinate.
 function util.getPlayerX()
     local x = lsne_memory.readsword("WRAM", 0x0094)
-    --print("X:", x)
     return x
 end
 
+-- Returns the current game status.
 -- 0 = level
 -- 1 = black screen?
 -- 2 = overworld
@@ -53,21 +57,20 @@ function util.getMarioGameStatus()
     return status
 end
 
---[[
-function util.getLevelTimer()
-    local value = lsne_memory.readsword("WRAM", 0x1493)
-    return value
-end
---]]
-
+-- Returns whether the level is beaten.
+-- TODO is this still used?
+-- TODO does this work?
 function util.isLevelBeaten()
     return util.getLevelBeatenStatus() == 1
 end
 
+-- Returns whether the game is over.
+-- TODO is this still used?
 function util.isGameOver()
     return util.getLevelBeatenStatus() == 128
 end
 
+-- Returns the level beaten status.
 -- 0 = not beaten
 -- 1 = beaten ?
 -- 128 = game over
@@ -76,18 +79,8 @@ function util.getLevelBeatenStatus()
     return value
 end
 
---[[
-function util.isSlidingDownFlagpole()
-    --Player "float" state
-    -- 0x00 - Standing on solid/else
-    -- 0x01 - Airborn by jumping
-    -- 0x02 - Airborn by walking of a ledge
-    -- 0x03 - Sliding down flagpole
-    local value = lsne_memory.readsword("WRAM", 0x001D)
-    return value == 0x03
-end
---]]
-
+-- Returns Mario's count of lifes.
+-- Seems to not be fully reliable.
 function util.getCountLifes()
     local value = lsne_memory.readsword("WRAM", 0x0DBE)
     -- value in memory is lifes-1
@@ -96,28 +89,20 @@ function util.getCountLifes()
     return value + 1
 end
 
--- TODO 0x13D9 0x13E4
-
+-- Returns Mario's current sprite.
+-- 62 = Mario death animation sprite.
 function util.getMarioImage()
     local value = lsne_memory.readsword("WRAM", 0x13E0)
     return value
 end
 
+-- Returns whether the level is currently ending (flat pole animation).
 function util.isLevelEnding()
     local value = lsne_memory.readsword("WRAM", 0x1493)
     return (value > 0 and value <= 255)
 end
 
---[[
-function util.getTime()
-    local hundreds = lsne_memory.readsword("WRAM", 0x0F31)
-    local tens = lsne_memory.readsword("WRAM", 0x0F32)
-    local ones = lsne_memory.readsword("WRAM", 0x0F33)
-    --return hundreds*100 + tens*10 + ones*1
-    return hundreds + tens + ones
-end
---]]
-
+-- Picks a random saved state and loads it.
 function util.loadRandomTrainingSaveState()
     local stateNames = {}
     for fname in paths.iterfiles("states/train/") do
@@ -125,12 +110,7 @@ function util.loadRandomTrainingSaveState()
             table.insert(stateNames, fname)
         end
     end
-    --[[
-    local stateNames = {
-        "lvl1-left-1.lsmv", "lvl1-left-2.lsmv",
-        "lvl1-right-1.lsmv", "lvl1-right-2.lsmv"
-    }
-    --]]
+
     if #stateNames == 0 then
         error("No training states found in 'states/train/' directory.")
     end
@@ -169,6 +149,8 @@ function util.rgb2y(im, threeChannels)
     return z
 end
 
+-- Resize an image to given dimensions, including RGB to grayscale conversion.
+-- TODO currently does not handle grayscale2rgb.
 function util.toImageDimensions(img, dimensions)
     local c, h, w = img:size(1), img:size(2), img:size(3)
     if dimensions[1] == 1 and c ~= dimensions[1] then
@@ -200,6 +182,7 @@ function getScreenCompressed()
     return util.loadJPGCompressed(fp, IMG_DIMENSIONS[1], IMG_DIMENSIONS[2], IMG_DIMENSIONS[3])
 end
 
+-- Load a JPG image from a file, but keep it compressed.
 function util.loadJPGCompressed(fp, channels, height, width)
     -- from https://github.com/torch/image/blob/master/doc/saveload.md
     local im = image.load(fp, 3, "float")
@@ -214,19 +197,23 @@ function util.loadJPGCompressed(fp, channels, height, width)
     return img_binary
 end
 
+-- Compress an uncompressed image tensor to a jpg-compressed image tensor.
 function util.compressJPG(im)
     return image.compressJPG(im, 100)
 end
 
+-- Decompress a jpg-compressed image tensor.
 function util.decompressJPG(img_binary)
     return image.decompressJPG(img_binary)
 end
 
+-- Save the global STATS-table to a file.
 function util.saveStats()
     local fp = "learned/stats.th7"
     torch.save(fp, STATS)
 end
 
+-- Load the global STATS-table from a file.
 function util.loadStats()
     local fp = "learned/stats.th7"
     if paths.filep(fp) then
@@ -234,6 +221,7 @@ function util.loadStats()
     end
 end
 
+-- Sleep for N seconds.
 function util.sleep(seconds)
     os.execute("sleep " .. tonumber(seconds))
 end
