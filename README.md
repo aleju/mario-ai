@@ -5,7 +5,7 @@ The underlying technique is deep Q-learning, as described in the [Atari paper](h
 
 # Video
 
-[![Model playing SMW](images/youtube.png?raw=true)](https://youtu.be/qksFwV74jeU)
+[![Model playing SMW](images/youtube.png?raw=true)](https://www.youtube.com/watch?v=L4KBBAwF_bE)
 
 # Methodology
 
@@ -85,7 +85,7 @@ Both networks have overall about 6.6M parameters.
 
 # Limitations
 
-The agent is trained mainly on the first level (first to the right in the overworld at the start).
+The agent is trained only on the first level (first to the right in the overworld at the start).
 Other levels suffer significantly more from various difficulties with which the agent can hardly deal. Some of these are:
 * Jumping puzzles. The agent will usually just jump to right and straight into its death.
 * Huge cannons balls. To get past them you have to jump on them or duck under them (big mario) or walk under them (small mario). Jumping on top of them is even rather hard for a human novice player. Ducking or walking under them is very hard for the agent due to the epsilon-greedy policy, which will randomly make mario jump and then instantly die.
@@ -126,7 +126,8 @@ Training on any level and then testing on another one is also rather difficult, 
   * Download the source code of [lsnes rr2 beta23](http://tasvideos.org/Lsnes.html). (**Not version rr1!** Other emulators will likely not work with the code.)
   * Extract the emulator source code and open the created directory.
   * Open `source/src/libray/lua.cpp` and insert the following code under `namespace {`:
-```#ifndef LUA_OK
+```
+#ifndef LUA_OK
 #define LUA_OK 0
 #endif
 
