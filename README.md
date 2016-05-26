@@ -115,7 +115,7 @@ Training on any level and then testing on another one is also rather difficult, 
 * Install torch.
   * Follow the steps from [torch.ch](http://torch.ch/docs/getting-started.html#_)
   * Make sure that the following packages are installed (`luarocks install packageName`): `nn`, `cudnn`, `paths`, `image`, `display`. display is usually not part of torch.
-* Intall the spatial transformer module for torch:
+* Install the spatial transformer module for torch:
   * Clone the stnbhdw repository to some directory: `git clone https://github.com/qassemoquab/stnbhwd.git`
   * Switch to that directory: `cd stnbhwd`
   * Compile the module: `luarocks make stnbhwd-scm-1.rockspec`
@@ -126,33 +126,33 @@ Training on any level and then testing on another one is also rather difficult, 
   * Download the source code of [lsnes rr2 beta23](http://tasvideos.org/Lsnes.html). (**Not version rr1!** Other emulators will likely not work with the code.)
   * Extract the emulator source code and open the created directory.
   * Open `source/src/libray/lua.cpp` and insert the following code under `namespace {`:
-```
-#ifndef LUA_OK
-#define LUA_OK 0
-#endif
+    ```
+    #ifndef LUA_OK
+    #define LUA_OK 0
+    #endif
 
-#ifdef LUA_ERRGCMM
-	REGISTER_LONG_CONSTANT("LUA_ERRGCMM", LUA_ERRGCMM, CONST_PERSISTENT | CONST_CS);
-#endif
-```
-This makes the emulator run in lua 5.1. Newer versions (than beta23) of lsnes rr2 might not need this.
+    #ifdef LUA_ERRGCMM
+    	REGISTER_LONG_CONSTANT("LUA_ERRGCMM", LUA_ERRGCMM, CONST_PERSISTENT | CONST_CS);
+    #endif
+    ```
+    This makes the emulator run in lua 5.1. Newer versions (than beta23) of lsnes rr2 might not need this.
   * Open `source/include/core/controller.hpp` and change the function `do_button_action` from private to public. Simply cut the line `void do_button_action(const std::string& name, short newstate, int mode);` in the `private:` block and paste it into the `public:` block.
   * Open `source/src/lua/input.cpp` and before `lua::functions LUA_input_fns(...` (at the end of the file) insert:
-```
-	int do_button_action(lua::state& L, lua::parameters& P)
-	{
+    ```
+    	int do_button_action(lua::state& L, lua::parameters& P)
+    	{
 		auto& core = CORE();
-                
-                std::string name;
-                short newstate;
-                int mode;
 
-		P(name, newstate, mode);
-                core.buttons->do_button_action(name, newstate, mode);
-                return 1;
-	}
-```
-  This method was necessary to actually press buttons from custom lua scripts. All of the emulator's default lua functions for that would just never work, because `core.lua2->input_controllerdata` apparently never gets set (which btw will let these functions silently fail, i.e. without any error).
+    		std::string name;
+    		short newstate;
+    		int mode;
+
+    		P(name, newstate, mode);
+    		core.buttons->do_button_action(name, newstate, mode);
+    		return 1;
+    	}
+    ```
+    This method was necessary to actually press buttons from custom lua scripts. All of the emulator's default lua functions for that would just never work, because `core.lua2->input_controllerdata` apparently never gets set (which btw will let these functions silently fail, i.e. without any error).
   * Again in `source/src/lua/input.cpp`, at the block `lua::functions LUA_input_fns(...`, add `do_button_action` to the lua commands that can be called from lua scripts loaded in the emulator. To do that, change the line `{"controller_info", controller_info},` to `{"controller_info", controller_info}, {"do_button_action", do_button_action},` .
   * Switch back to `source/`.
   * Compile the emulator with `make`.
