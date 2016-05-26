@@ -1,3 +1,7 @@
+-- Functions and constants dealing with the choice and application of actions,
+-- i.e. pressing buttons on the controller.
+-- Functions to find optimal actions are in network.lua .
+
 local actions = {}
 
 -- Action ids used by the emulator (?)
@@ -121,6 +125,7 @@ function actions.endAllActions()
         local mode = 3 -- 1 = autohold, 2 = framehold, others = press/release
         input.do_button_action(actions.ACTION_TO_BUTTON_NAME[actions.ACTIONS_ALL[i]], newstate, mode)
     end
+end
 
 -- Starts an action.
 -- @param action An Action object.
@@ -141,7 +146,7 @@ end
 -- @param perfect Boolean, sets exploration prob. to 0.0 (not really necessary anymore with pExplore).
 -- @param bestAction Optionally an Action object for epsilon-greedy policy, otherwise the best action will be approximated.
 -- @param pExplore Exploration probability for epsilon-greedy policy.
-function chooseAction(lastStates, perfect, bestAction, pExplore)
+function actions.chooseAction(lastStates, perfect, bestAction, pExplore)
     perfect = perfect or false
     pExplore = pExplore or STATS.P_EXPLORE_CURRENT
     local _action, _actionValue

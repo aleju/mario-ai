@@ -1,3 +1,6 @@
+-- Various utility functions involving game speed, extracting information from
+-- the emulator's memory, screen capturing, image processing, save state handling
+-- and plotting.
 local util = {}
 
 -- Returns whether the game is paused.
@@ -102,7 +105,7 @@ function util.isLevelEnding()
     return (value > 0 and value <= 255)
 end
 
--- Picks a random saved state and loads it.
+-- Picks a random saved state and loads it (testing states only).
 function util.loadRandomTrainingSaveState()
     local stateNames = {}
     for fname in paths.iterfiles("states/train/") do
@@ -117,6 +120,24 @@ function util.loadRandomTrainingSaveState()
     local stateName = stateNames[math.random(#stateNames)]
     print("Reloading state ", stateName)
     local state = movie.to_rewind("states/train/" .. stateName)
+    movie.unsafe_rewind(state)
+end
+
+-- Picks a random saved state and loads it (testing states only).
+function util.loadRandomTestSaveState()
+    local stateNames = {}
+    for fname in paths.iterfiles("states/test/") do
+        if string.match(fname, "^.*\.lsmv$") then
+            table.insert(stateNames, fname)
+        end
+    end
+
+    if #stateNames == 0 then
+        error("No test states found in 'states/test/' directory.")
+    end
+    local stateName = stateNames[math.random(#stateNames)]
+    print("Reloading state ", stateName)
+    local state = movie.to_rewind("states/test/" .. stateName)
     movie.unsafe_rewind(state)
 end
 
@@ -164,7 +185,7 @@ end
 
 -- Take a screenshot of the game and return it as a tensor.
 -- TODO no longer used?
-function getScreen()
+function util.getScreen()
     local fp = SCREENSHOT_FILEPATH
     gui.screenshot(fp)
     local screen = image.load(fp, 3, "float"):clone()
@@ -176,7 +197,7 @@ function getScreen()
 end
 
 -- Take a screenshot of the game and return it jpg-compressed as a tensor.
-function getScreenCompressed()
+function util.getScreenCompressed()
     local fp = SCREENSHOT_FILEPATH
     gui.screenshot(fp)
     return util.loadJPGCompressed(fp, IMG_DIMENSIONS[1], IMG_DIMENSIONS[2], IMG_DIMENSIONS[3])
@@ -224,6 +245,20 @@ end
 -- Sleep for N seconds.
 function util.sleep(seconds)
     os.execute("sleep " .. tonumber(seconds))
+end
+
+-- plot average recieved rewards (per N actions)
+function util.plotAverageReward(rewardData, clampTo)
+    clampTo = clampTo or 10
+    local points = {}
+    for i=1,#rewardData do
+        local point = rewardData[i]
+        local direct = math.max(math.min(point[2], clampTo), (-1) * clampTo)
+        local observedGamma = math.max(math.min(point[3], clampTo), (-1) * clampTo)
+        local expectedGamma = math.max(math.min(point[4], clampTo), (-1) * clampTo)
+        table.insert(points, {point[1], direct, observedGamma, expectedGamma})
+    end
+    display.plot(points, {win=3, labels={'action counter', 'direct', 'observed gamma', 'expected gamma'}, title='Average rewards per N actions'})
 end
 
 return util

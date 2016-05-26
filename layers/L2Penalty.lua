@@ -1,3 +1,4 @@
+-- Modified version of torch's L1Penalty
 local L2Penalty, parent = torch.class('nn.L2Penalty','nn.Module')
 
 --This module acts as an L2 latent state regularizer, adding the

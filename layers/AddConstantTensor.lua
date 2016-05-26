@@ -1,3 +1,6 @@
+-- Used in the Spatial Transformer. Adds a constant tensor to another tensor.
+-- Is adapted to the specific situation and might not work in other cases, i.e.
+-- with other tensor sizes.
 local AddConstantTensor, parent = torch.class('nn.AddConstantTensor', 'nn.Module')
 
 function AddConstantTensor:__init(tnsr, ip)
