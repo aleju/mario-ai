@@ -1,7 +1,7 @@
 # About
 
-This project contains code to train a model that automatically learns to play Super Mario World from raw pixel values.
-The underlying technique is deep Q-learning, as described in the [Atari paper](http://arxiv.org/abs/1312.5602).
+This project contains code to train a model that automatically plays the first level of Super Mario World using only raw pixels as the input (no hand-engineered features).
+The used technique is deep Q-learning, as described in the [Atari paper](http://arxiv.org/abs/1312.5602) ([Summary](https://github.com/aleju/papers/blob/master/neural-nets/Playing_Atari_with_Deep_Reinforcement_Learning.md)), combined with a [Spatial Transformer](https://arxiv.org/abs/1506.02025).
 
 # Video
 
@@ -12,10 +12,10 @@ The underlying technique is deep Q-learning, as described in the [Atari paper](h
 ## Basics, replay memory
 
 The training method is deep Q-learning with a replay memory, i.e. the model observes sequences of screens,
-saves them into its "memory" and later trains on them, where "training" means that it learns to accurately predict the expected action reward values
+saves them into its memory and later trains on them, where "training" means that it learns to accurately predict the expected action reward values
 ("action" means "press button X") based on the collected memories.
-The replay memory has by default a size of 250k training entries.
-When it starts to get full, the oldest entries are deleted every now and then.
+The replay memory has by default a size of 250k entries.
+When it starts to get full, new entries replace older ones.
 For the training batches, examples are chosen randomly (uniform distribution) and rewards of memories are reestimated based on what the network has learned so far.
 
 ## Inputs, outputs, actions
@@ -25,8 +25,8 @@ Each example's input has the following structure:
 * The last T screenshots, each downscaled to size 32x32 (grayscale, slightly cropped).
 * The last screenshot, at size 64x64 (grayscale, slightly cropped).
 
-T is currently set to 4 (note that this includes the last screen of the sequence). Screens are captured at every 5th frame.
-Each example's output are the action reward values of the chosen action (received direct reward + discounted anticipated future reward).
+T is currently set to 4 (note that this includes the last state of the sequence). Screens are captured at every 5th frame.
+Each example's output are the action reward values of the chosen action (received direct reward + discounted Q-value of the next state).
 The model can choose two actions per state: One arrow button (up, down, right, left) and one of the other control buttons (A, B, X, Y).
 This is different from the Atari-model, in which the agent could only pick one button at a time.
 (Without this change, the agent could theoretically not make many jumps, which force you to keep the A button pressed and move to the right.)
@@ -41,6 +41,8 @@ The agent gets the following rewards:
 
 The `gamma` (discount for expected/indirect rewards) is set to `0.9`.
 
+Training the model only on score increases (like in the Atari paper) would most likely not work, because enemies respawn when their spawning location moves outside of the screen, so the agent could just kill them again and again, each time increasing its score.
+
 ## Error function
 
 A selective MSE is used to train the agent. That is, for each example gradients are calculated just like they would be for a MSE.
@@ -50,7 +52,7 @@ Other pairs of actions would have been possible, but the agent didn't choose the
 Their reward values (per example) are set to 0, but not because they were truely 0, but instead because we don't know what reward the agent would have received if it had chosen them.
 Backpropagating gradient for them (i.e. if the agent predicts a value unequal to 0) is therefore not reasonable.
 
-This implementation can afford to differentiate between the chosen and not chosen buttons based on the reward being unequal to 0, because the received reward (here) is almost never exactly 0.
+This implementation can afford to differentiate between the chosen and not chosen buttons (in the target vector) based on the reward being unequal to 0, because the received reward of a chosen button is (here) almost never exactly 0 (due to the construction of the reward function).
 Other implementations might need to take more care of this step.
 
 ## Policy
@@ -70,7 +72,7 @@ The model consists of three branches:
   * It has one sub-branch that applies convolutions to the whole image.
   * It has one sub-branch that applies convolutions to an area of interest, using a Spatial Transformer to extract that area.
 
-At the end of the branches, everything is merged to one linear layer, fed through a hidden layer, before reaching the output neurons. These output neurons predict the expected reward per pressed button.
+At the end of the branches, everything is merged to one vector, fed through a hidden layer, before reaching the output neurons. These output neurons predict the expected reward per pressed button.
 
 Overview of the network:
 
@@ -123,7 +125,7 @@ Training on any level and then testing on another one is also rather difficult, 
   * `sudo apt-get install sqlite3 libsqlite3-dev`
   * `luarocks install lsqlite3`
 * Compile the emulator:
-  * Download the source code of [lsnes rr2 beta23](http://tasvideos.org/Lsnes.html). (**Not version rr1!** Other emulators will likely not work with the code.)
+  * Download the source code of [lsnes rr2 beta23](http://tasvideos.org/Lsnes.html). **Not version rr1!** (Note that other emulators than lsnes will likely not work with the code in this repository.)
   * Extract the emulator source code and open the created directory.
   * Open `source/src/libray/lua.cpp` and insert the following code under `namespace {`:
     ```
@@ -141,7 +143,7 @@ Training on any level and then testing on another one is also rather difficult, 
     ```
     	int do_button_action(lua::state& L, lua::parameters& P)
     	{
-		auto& core = CORE();
+    		auto& core = CORE();
 
     		std::string name;
     		short newstate;
@@ -181,6 +183,6 @@ Training on any level and then testing on another one is also rather difficult, 
 * Now start the training via `Tools -> Run Lua script...` and select `train.lua`.
 * Expected training time: Maybe 10 hours, less with good hardware. (About 0.5M actions.)
 * You can stop the training via `Tools -> Reset Lua VM`.
-* If you want to restart the training from scratch (e.g. for a second run), you will have to delete the files in `learned/`. Note that you can sometimes keep the replay memory and train a new network with it.
+* If you want to restart the training from scratch (e.g. for a second run), you will have to delete the files in `learned/`. Note that you can keep the replay memory (`memory.sqlite`) and train a new network with it.
 
-You can test the model using `test.lua`. Don't expect it to always finish the level. It will likely still die a lot, especially if you ended the training on a bad set of parameters.
+You can test the model using `test.lua`. Don't expect it to play amazingly well. The agent will still die a lot, even more so if you ended the training on a bad set of parameters.
