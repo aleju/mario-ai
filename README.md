@@ -3,6 +3,10 @@
 This project contains code to train a model that automatically learns to play Super Mario World from raw pixel values.
 The underlying technique is deep Q-learning, as described in the [Atari paper](http://arxiv.org/abs/1312.5602).
 
+# Video
+
+[![Model playing SMW](images/youtube.png?raw=true)](https://youtu.be/qksFwV74jeU)
+
 # Methodology
 
 ## Basics, replay memory
@@ -70,11 +74,11 @@ At the end of the branches, everything is merged to one linear layer, fed throug
 
 Overview of the network:
 
-![Q architecture](images/Q.png?raw=true "Q architecture")
+![Q architecture](images/Q11.png?raw=true "Q architecture")
 
 The Spatial Transformer requires a localization network, which is shown below:
 
-![Localization net architecture](images/localization_net.png?raw=true "Localization net architecture")
+![Localization net architecture](images/localization_net2.png?raw=true "Localization net architecture")
 
 Both networks have overall about 6.6M parameters.
 
@@ -90,6 +94,7 @@ Other levels suffer significantly more from various difficulties with which the 
 
 The first level has hardly any of these difficulties and therefore lends itself to DQN, which is why it is used here.
 Training on any level and then testing on another one is also rather difficult, because each level seems to introduce new things, like new and quite different enemies or new mechanics (climbing, new items, objects that squeeze you to death, etc.).
+
 
 # Usage
 
@@ -172,7 +177,9 @@ This makes the emulator run in lua 5.1. Newer versions (than beta23) of lsnes rr
 * Configure your controller buttons (`Configure -> Settings -> Controller`). Play until the overworld pops up. There, move to the right and start that level. Play that level a bit and save a handful or so of states via the emulator's `File -> Save -> State` to the subdirectory `states/train`. Name doesn't matter, but they have to end in `.lsmv`. (Try to spread the states over the whole level.)
 * Start the display server by opening a command window and using `th -ldisplay.start`. If that doesn't work you haven't installed display yet, use `luarocks install display`.
 * Open the display server output by opening `http://localhost:8000/` in your browser.
-* Now start the training via `Tools -> Run Lua script...` and select `train_sqlite.lua`.
+* Now start the training via `Tools -> Run Lua script...` and select `train.lua`.
 * Expected training time: Maybe 10 hours, less with good hardware. (About 0.5M actions.)
 * You can stop the training via `Tools -> Reset Lua VM`.
 * If you want to restart the training from scratch (e.g. for a second run), you will have to delete the files in `learned/`. Note that you can sometimes keep the replay memory and train a new network with it.
+
+You can test the model using `test.lua`. Don't expect it to always finish the model. It will likely still die a lot, especially if you ended on a bad set of parameters.
