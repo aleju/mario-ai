@@ -1,3 +1,20 @@
+# emulator save states
+*.lsmv
+*.lsmv.bak
+
+# learned model files
+learned/memory.sqlite
+learned/network.th7
+learned/network.t7
+learned/stats.th7
+learned/stats.t7
+
+# other stuff
+lsnes-rr2-beta23-src
+video
+ramdisk.txt
+lsnes.log
+
 # Compiled Lua sources
 luac.out
 
