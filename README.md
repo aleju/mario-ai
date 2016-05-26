@@ -174,7 +174,7 @@ Training on any level and then testing on another one is also rather difficult, 
 * `cd` into the created directory.
 * Download a Super Mario World (USA) ROM.
 * Start lsnes (from the repository directory) by using `lsnes` in a terminal window.
-* In the emulator, go to `Configure -> Settings -> Advanced` and set the lua memory to 1024MB. (Only has to be done once.)
+* In the emulator, go to `Configure -> Settings -> Advanced` and set the lua memory limit to 1024MB. (Only has to be done once.)
 * Configure your controller buttons (`Configure -> Settings -> Controller`). Play until the overworld pops up. There, move to the right and start that level. Play that level a bit and save a handful or so of states via the emulator's `File -> Save -> State` to the subdirectory `states/train`. Name doesn't matter, but they have to end in `.lsmv`. (Try to spread the states over the whole level.)
 * Start the display server by opening a command window and using `th -ldisplay.start`. If that doesn't work you haven't installed display yet, use `luarocks install display`.
 * Open the display server output by opening `http://localhost:8000/` in your browser.
@@ -183,4 +183,4 @@ Training on any level and then testing on another one is also rather difficult, 
 * You can stop the training via `Tools -> Reset Lua VM`.
 * If you want to restart the training from scratch (e.g. for a second run), you will have to delete the files in `learned/`. Note that you can sometimes keep the replay memory and train a new network with it.
 
-You can test the model using `test.lua`. Don't expect it to always finish the model. It will likely still die a lot, especially if you ended on a bad set of parameters.
+You can test the model using `test.lua`. Don't expect it to always finish the level. It will likely still die a lot, especially if you ended the training on a bad set of parameters.
