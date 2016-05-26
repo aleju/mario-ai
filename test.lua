@@ -23,7 +23,7 @@ memory.load()
 
 print("Loading stats...")
 util.loadStats()
-STATS.P_EXPLORE_CURRENT = 0.2
+STATS.P_EXPLORE_CURRENT = 0.25 -- epsilon in epsilon-greedy policy. Introducing a medium amount of noise here seems to help the agent a bit.
 
 print("Starting loop.")
 
